@@ -1,0 +1,8 @@
+th.dt-center, td.dt-center {
+    text-align: center;
+}
+
+body {
+    overflow: visible !important;
+    padding-bottom: 3%;
+}

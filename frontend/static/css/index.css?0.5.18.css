@@ -1,0 +1,54 @@
+html, body {
+    height: 100%;
+}
+
+body {
+    overflow: auto !important;
+    display: flex;
+    flex-direction: column;
+}
+
+.content {
+    bottom: 10%;
+    flex: 1 0 auto;
+    margin-top: -13%;
+    padding-top: 5%;
+    left: 25%;
+    right: 25%;
+    top: -15%;
+}
+
+
+.footer {
+    flex-shrink: 0;
+}
+
+#index-logo {
+    display: inline-block;
+    width: 74%;
+}
+
+.small-footer {
+    display: none;
+}
+
+@media (max-height: 725px) {
+    body {
+        display: block;
+    }
+
+    .centered {
+        display: none;
+    }
+
+    .small-footer {
+        display: block;
+    }
+}
+
+/*/iphone 5 exception/*/
+@media (max-width: 321px) {
+    .content {
+        margin-top: 10%;
+    }
+}

@@ -1,0 +1,20 @@
+body {
+    overflow: auto;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-weight: 400;
+    color: #3E4349;
+}
+
+p {
+    color: #3E4349;
+}
+
+[data-theme="dark"] h1, h2, h3, h4, h5, h6 {
+    color: white;
+}
+
+[data-theme="dark"] p {
+    color: white;
+}

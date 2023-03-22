@@ -1,0 +1,10 @@
+[data-theme="dark"] div.card {
+    color: var(--light-dark) !important;
+    background-color: var(--dark) !important;
+    border-color: var(--darkest) !important;
+}
+
+[data-theme="dark"] textarea {
+    color: var(--light-dark) !important;
+    background-color: var(--darker) !important;
+}

@@ -1,0 +1,51 @@
+body {
+    overflow: hidden;
+}
+
+
+.scalable-logo {
+    max-width: 100%;
+    min-width: 100%;
+    display: none;
+}
+
+.dropdown-menu {
+    margin-left: -20px;
+}
+
+.nav-item {
+    font-size: 100%;
+}
+
+@media (min-width: 992px) {
+    .nav-item {
+        font-size: 70%;
+    }
+}
+
+@media (min-width: 1186px) {
+    .nav-item {
+        font-size: 100%;
+    }
+}
+
+/*/iphone 5 /*/
+@media (max-width: 730px) {
+    body {
+        overflow: visible;
+    }
+
+    .scalable-logo {
+        max-width: 65vw;
+        min-width: 65vw;
+    }
+}
+
+
+@media (max-width: 930px) {
+    .dropdown-menu {
+        margin-left: 10px;
+    }
+
+}
+

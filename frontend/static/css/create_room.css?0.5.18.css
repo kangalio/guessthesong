@@ -1,0 +1,16 @@
+body {
+    overflow: auto !important;
+}
+
+body {
+    position: -webkit-sticky;
+    position: sticky;
+    top: 0;
+    z-index: 1020;
+    overflow: hidden;
+}
+
+.btn-placement-fix {
+    margin-top: 5%;
+    margin-left: 25%;
+}

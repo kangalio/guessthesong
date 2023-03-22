@@ -259,15 +259,17 @@ fadeInPage();
     <script type="text/javascript" charset="utf-8">
         let responsive_state_array = [];
 
-        socket = io.connect(`https` + '://' + document.domain + ':' + location.port + '/server-browser');
-        let dataFromServer = JSON.parse('[]');
+        socket = new WebSocket('ws://' + document.domain + ':9001');
+        
+        dataFromServer = JSON.parse('[]');
 
-        socket.on('message', raw_data => {
-            const data = cenOrOri(raw_data);
+        socket.onmessage = (event) => {
+            const data = JSON.parse(event.data);
             if (data['state'] === 'fetch_new') {
-                dataFromServer = cenOrOri(raw_data)['msg'];
+                dataFromServer = data['msg'];
+                addRows();
             }
-        });
+        };
 
         function is_every_row_collapsed() {
             for (let room in responsive_state_array) {
@@ -276,14 +278,6 @@ fadeInPage();
                 }
             }
             return true
-        }
-
-
-        setInterval(fetchData, 5000);
-
-        function fetchData() {
-            socket.emit('fetch_new');
-            addRows();
         }
 
         function addRows() {

@@ -3,7 +3,7 @@ struct Room {
 }
 
 struct State {
-    rooms: Vec<Room>,
+    rooms: std::sync::Mutex<Vec<Room>>,
 }
 
 fn http_url_to_local_path(url: &str) -> std::path::PathBuf {
@@ -18,7 +18,7 @@ fn http_url_to_local_path(url: &str) -> std::path::PathBuf {
     path
 }
 
-fn create_room(state: &mut State, body: &str) {
+fn create_room(state: &State, body: &str) {
     let mut params = std::collections::HashMap::new();
     for kv_pair in body.split('&') {
         let Some((key, value)) = kv_pair.split_once('=') else {
@@ -29,7 +29,7 @@ fn create_room(state: &mut State, body: &str) {
         params.insert(key, value);
     }
 
-    state.rooms.push(Room {
+    state.rooms.lock().unwrap().push(Room {
         name: params.get("room_name").copied().unwrap_or("").to_string(),
     });
 }
@@ -37,11 +37,56 @@ fn create_room(state: &mut State, body: &str) {
 fn main() {
     let server = tiny_http::Server::http("0.0.0.0:5234").expect("failed to open HTTP server");
 
-    let mut state = State {
-        rooms: vec![Room {
+    let state = std::sync::Arc::new(State {
+        rooms: std::sync::Mutex::new(vec![Room {
             name: "starter room lol".to_string(),
-        }],
-    };
+        }]),
+    });
+
+    let state2 = state.clone();
+    std::thread::spawn(move || {
+        let state = state2;
+
+        let server = std::net::TcpListener::bind("0.0.0.0:9001").unwrap();
+        for stream in server.incoming() {
+            let state2 = state.clone();
+            std::thread::spawn(move || {
+                let state = state2;
+                let mut websocket = tungstenite::accept(stream.unwrap()).unwrap();
+
+                loop {
+                    let rooms = state
+                        .rooms
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .map(|r| {
+                            serde_json::json!( {
+                                "code": 1080,
+                                "game_mode": "Themes",
+                                "idle": 50,
+                                "name": &r.name,
+                                "players": 4,
+                                "status": "Public",
+                                "theme": "Random songs",
+                            } )
+                        })
+                        .collect::<Vec<_>>();
+                    let msg = serde_json::json!( {
+                        "state": "fetch_new",
+                        "msg": rooms,
+                    } );
+                    websocket
+                        .write_message(tungstenite::Message::Text(
+                            serde_json::to_string(&msg).unwrap(),
+                        ))
+                        .unwrap();
+
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                }
+            });
+        }
+    });
 
     loop {
         let mut request = match server.recv() {
@@ -72,7 +117,7 @@ fn main() {
             }
             tiny_http::Method::Post => {
                 if request.url().contains("create-room") {
-                    create_room(&mut state, &body);
+                    create_room(&state, &body);
                 }
             }
             other => {

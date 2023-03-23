@@ -1,0 +1,57 @@
+/* Large devices (desktops, 992px and up)*/
+@media (min-width: 992px) {
+    .info input {
+        font-size: 1rem;
+        padding: .375rem .75rem;
+    }
+
+    .info button {
+        font-size: 1rem;
+        padding: .375rem .75rem;
+    }
+
+    .info span {
+        font-size: 1rem;
+        padding: .375rem .75rem;
+    }
+
+    .instruction {
+        font-size: 1rem;
+    }
+
+    .lobby-header h1 {
+        font-size: 260%;
+    }
+
+    .players-chat {
+        height: calc(98vh - 56px - 57px - 38px - 64px);
+    }
+
+    .players-chat h1 {
+        font-size: 150%;
+    }
+
+    .chat-main {
+        height: calc(100% - 61px);
+    }
+
+    .form {
+        height: 38px;
+    }
+
+    .players-list {
+        font-size: 1rem;
+    }
+
+    .msg {
+        font-size: 1rem;
+    }
+
+    .form input {
+        font-size: 1rem;
+    }
+
+    .form button {
+        font-size: 1rem;
+    }
+}

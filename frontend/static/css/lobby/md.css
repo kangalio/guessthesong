@@ -1,0 +1,88 @@
+/*Medium devices (tablets, 768px and up)*/
+@media (min-width: 768px) {
+    .lobby-header h1 {
+        font-size: 200%;
+    }
+
+    .info input {
+        font-size: 75%;
+        padding-right: .35rem;
+        padding-left: .35rem;
+    }
+
+    .info button {
+        font-size: 75%;
+        padding-right: .35rem;
+        padding-left: .35rem;
+    }
+
+    .info span {
+        font-size: 75%;
+        padding-right: .35rem;
+        padding-left: .35rem;
+    }
+
+    .room-code-group {
+        margin-right: -15px;
+    }
+
+    .room-pass-code {
+        margin-right: -15px;
+        margin-left: -13px;
+    }
+
+    .room-url-group {
+        margin-right: -15px;
+        margin-left: -13px;
+    }
+
+    .room-start-group {
+        margin-left: -13px;
+    }
+
+    .room-settings-group {
+        margin-left: -28px;
+    }
+
+    .instruction {
+        font-size: 75%;
+    }
+
+    .players-chat {
+        height: calc(98vh - 46px - 56px - 32px - 64px);
+    }
+
+    .players-chat h1 {
+        font-size: 120%;
+    }
+
+    .chat-main {
+        height: calc(100% - 61px);
+    }
+
+    .form {
+        height: 38px;
+    }
+
+    .players-list {
+        font-size: 75%;
+    }
+
+    .msg {
+        font-size: 75%;
+    }
+
+    .form input {
+        font-size: 75%;
+    }
+
+    .form button {
+        font-size: 75%;
+    }
+
+    @media (orientation: landscape) and (max-width: 991px) {
+        .players-chat {
+            height: calc(102vh - 46px - 56px - 32px - 64px);
+        }
+    }
+}

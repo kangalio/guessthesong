@@ -4,7 +4,7 @@ struct Player {
 
 struct Room {
     name: String,
-    code: u32,
+    id: u32,
     players: Vec<Player>,
     password: Option<String>, // If None, room is public
     explicit_songs: bool,
@@ -29,7 +29,7 @@ fn http_url_to_local_path(url: &str) -> std::path::PathBuf {
     path
 }
 
-fn create_room(state: &State, body: &str) {
+fn create_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty> {
     let mut params = std::collections::HashMap::new();
     for kv_pair in body.split('&') {
         let Some((key, value)) = kv_pair.split_once('=') else {
@@ -40,12 +40,13 @@ fn create_room(state: &State, body: &str) {
         params.insert(key, value);
     }
 
+    let id;
     {
         let mut rooms = state.rooms.lock();
-        let code = rooms.iter().map(|r| r.code).max().unwrap_or(0) + 1; // generate a new unambiguous code
+        id = rooms.iter().map(|r| r.id).max().unwrap_or(0) + 1; // generate a new unambiguous ID
         rooms.push(Room {
             name: params.get("room_name").copied().unwrap_or("").to_string(),
-            code,
+            id,
             password: match params.get("password").copied() {
                 None | Some("") => None,
                 Some(x) => Some(x.to_string()),
@@ -65,6 +66,12 @@ fn create_room(state: &State, body: &str) {
             created_at: std::time::Instant::now(),
         });
     }
+
+    // TODO: don't hardcode the URL somehow
+    let redirect_header =
+        tiny_http::Header::from_bytes("Location", format!("http://127.0.0.1:5234/room/{}", id))
+            .expect("cant happen");
+    tiny_http::Response::empty(302).with_header(redirect_header)
 }
 
 fn main() {
@@ -74,7 +81,7 @@ fn main() {
 
     let state = std::sync::Arc::new(State {
         rooms: parking_lot::Mutex::new(vec![Room {
-            code: 420,
+            id: 420,
             name: "starter room lol".to_string(),
             players: vec![],
             password: None,
@@ -116,7 +123,7 @@ fn main() {
                         .iter()
                         .map(|r| {
                             serde_json::json!( {
-                                "code": r.code,
+                                "code": r.id,
                                 "game_mode": "Themes",
                                 "idle": (std::time::Instant::now() - r.created_at).as_secs(),
                                 "name": &r.name,
@@ -162,21 +169,42 @@ fn main() {
 
         match request.method() {
             tiny_http::Method::Get => {
-                let response_result =
+                let response_result = if let Some((_, room_id)) = request.url().split_once("/room/")
+                {
+                    match std::fs::read_to_string("frontend/room_TEMPLATE.html") {
+                        Ok(html) => {
+                            let html = html.replace("ROOMID", room_id);
+                            request.respond(
+                                tiny_http::Response::from_data(html).with_header(
+                                    tiny_http::Header::from_bytes("Content-Type", "text/html")
+                                        .expect("can't fail"),
+                                ),
+                            )
+                        }
+                        Err(e) => request.respond(
+                            tiny_http::Response::from_string(format!("{}", e))
+                                .with_status_code(404),
+                        ),
+                    }
+                } else {
                     match std::fs::File::open(http_url_to_local_path(request.url())) {
                         Ok(file) => request.respond(tiny_http::Response::from_file(file)),
                         Err(e) => request.respond(
                             tiny_http::Response::from_string(format!("{}", e))
                                 .with_status_code(404),
                         ),
-                    };
+                    }
+                };
+
                 if let Err(e) = response_result {
                     log::error!("failed to send HTTP response: {}", e);
                 }
             }
             tiny_http::Method::Post => {
                 if request.url().contains("create-room") {
-                    create_room(&state, &body);
+                    if let Err(e) = request.respond(create_room(&state, &body)) {
+                        log::error!("failed to send HTTP response: {}", e);
+                    }
                 }
             }
             other => {

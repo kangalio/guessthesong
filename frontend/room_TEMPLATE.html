@@ -1153,7 +1153,7 @@ fadeInPage();
 
     <script>
         const uuid = `6c665ffb-9cf9-4468-bba5-b979231c54cc`;
-        const room = `ROOMID`;
+        const room = ROOMID;
         const roomCode = `d70772b781cf4ede85b078f9d05d48c1`;
 
         if (location.port === "")
@@ -1161,7 +1161,7 @@ fadeInPage();
         else
             document.getElementById("roomURLPlaceholder").value = `https` + '://' + document.domain + ':' + location.port + '/join/' + room;
 
-        const socket = io('/' + roomCode);
+        const socket = new WebSocket('ws://' + document.domain + ":9002");
     </script>
 
 

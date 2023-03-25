@@ -17,7 +17,6 @@ function playerJoinOrLeave(payload, owner) {
     const button = document.getElementById("startGameButton");
     const button2 = document.getElementById("startGameSpinner");
     if (uuid !== lobbyOwner) {
-
         selector.addClass("disabled");
         button.style.display = "none";
         button2.style.display = "block";
@@ -38,9 +37,11 @@ function playerJoinOrLeave(payload, owner) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-
-    socket.on('message', raw_data => {
-        const data = cenOrOri(raw_data);
+    socket.onopen = (event) => {
+        socket.send(JSON.stringify({"type": "join", "room": room}));
+    };
+    socket.addEventListener("message", (event) => {
+        const data = JSON.parse(event.data);
         if (data['state'] === 'join') {
             const payload = data['payload'];
             playerJoinOrLeave(payload['payload'], payload['owner']);
@@ -85,7 +86,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function changeGameState() {
-    socket.emit('start-game');
+    socket.send('{"type": "start-game"}');
 }
 
 function buildPlayerList() {
@@ -166,10 +167,11 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.querySelector('#send_message').onclick = () => {
-        socket.emit('incoming-msg', {
+        socket.send(JSON.stringify({
+            "type": "incoming-msg",
             'state': 'chat',
             'msg': document.querySelector('#user_message').value
-        });
+        }));
 
         document.querySelector('#user_message').value = '';
     };
@@ -178,13 +180,13 @@ document.addEventListener('DOMContentLoaded', () => {
         return ("#" + (uuid.replace(/-/g, "").slice(0, 6)).toString())
     }
 
-// Scroll chat window down
+    // Scroll chat window down
     function scrollDownChatWindow() {
         const chatWindow = document.querySelector(".chat-main");
         chatWindow.scrollTop = chatWindow.scrollHeight;
     }
 
-// https://stackoverflow.com/a/18971171
+    // https://stackoverflow.com/a/18971171
     function splitString(str, length) {
         const words = str.split(" ");
         for (let j = 0; j < words.length; j++) {
@@ -201,9 +203,9 @@ document.addEventListener('DOMContentLoaded', () => {
         return words;
     }
 
-// Display all incoming messages
-    socket.on('message', raw_data => {
-        const data = cenOrOri(raw_data);
+    // Display all incoming messages
+    socket.addEventListener("message", (event) => {
+        const data = JSON.parse(event.data);
         if (data['state'] === 'chat') {
 
             // Display current message

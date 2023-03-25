@@ -263,13 +263,13 @@ fadeInPage();
         
         dataFromServer = JSON.parse('[]');
 
-        socket.onmessage = (event) => {
+        socket.addEventListener("message", (event) => {
             const data = JSON.parse(event.data);
             if (data['state'] === 'fetch_new') {
                 dataFromServer = data['msg'];
                 addRows();
             }
-        };
+        });
 
         function is_every_row_collapsed() {
             for (let room in responsive_state_array) {

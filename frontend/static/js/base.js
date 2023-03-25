@@ -19,21 +19,21 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof socket === 'undefined') {
         return;
     }
-    socket.on('connect_error', () => {
-        disconnected = true;
-    });
+    // socket.on('connect_error', () => {
+    //     disconnected = true;
+    // });
 
-    socket.on('reconnect', () => {
-        location.reload();
-    });
+    // socket.on('reconnect', () => {
+    //     location.reload();
+    // });
 
-    socket.on('connect', () => {
-        disconnected = false
-    });
+    // socket.on('connect', () => {
+    //     disconnected = false
+    // });
 
-    socket.on('reconnecting', () => {
-        createPersistentToast('Reconnecting!', 'Connection lost. Trying to reconnect to the server.', 'warning');
-    });
+    // socket.on('reconnecting', () => {
+    //     createPersistentToast('Reconnecting!', 'Connection lost. Trying to reconnect to the server.', 'warning');
+    // });
 
     window.setInterval(pingAlive, 40000);
 
@@ -42,8 +42,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // BASE SOCKET MESSAGES
-    socket.on('message', raw_data => {
-        const data = cenOrOri(raw_data);
+    socket.addEventListener("message", (event) => {
+        const data = JSON.parse(event.data);
         if (data['state'] === 'join') {
             createToast('System says:', data['message'] + ' has joined!', 'info');
         }

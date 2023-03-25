@@ -154,6 +154,108 @@ fn main() {
         }
     });
 
+    let state2 = state.clone();
+    std::thread::spawn(move || {
+        let state = state2;
+
+        let server = std::net::TcpListener::bind("0.0.0.0:9002").unwrap();
+        for stream in server.incoming() {
+            let mut websocket = match stream {
+                Ok(stream) => match tungstenite::accept(stream) {
+                    Ok(websocket) => websocket,
+                    Err(e) => {
+                        log::error!("websocket connection failed: {}", e);
+                        continue;
+                    }
+                },
+                Err(e) => {
+                    log::error!("websocket connection failed: {}", e);
+                    continue;
+                }
+            };
+
+            let state2 = state.clone();
+            std::thread::spawn(move || {
+                let state = state2;
+
+                let mut room_id = None;
+                while let Ok(msg) = websocket.read_message() {
+                    dbg!(&msg);
+
+                    #[derive(serde::Deserialize, Debug)]
+                    #[serde(tag = "type")]
+                    #[serde(rename_all = "kebab-case")]
+                    enum Message {
+                        Join { room: u32 },
+                        IncomingMsg { msg: String },
+                    }
+
+                    let msg: Message = match msg {
+                        tungstenite::Message::Text(msg) => match serde_json::from_str(&msg) {
+                            Ok(msg) => msg,
+                            Err(e) => {
+                                log::error!("malformed websocket message {:?}: {}", e, msg);
+                                continue;
+                            }
+                        },
+                        other => {
+                            log::info!("ignoring websocket message {:?}", other);
+                            continue;
+                        }
+                    };
+
+                    dbg!(&msg);
+                    match msg {
+                        Message::Join { room } => {
+                            websocket
+                                .write_message(tungstenite::Message::Text(
+                                    serde_json::to_string(&serde_json::json!( {
+                                        "state": "joined",
+                                        "payload": {
+                                            "state": "player_data",
+                                            "payload": [
+                                                {
+                                                    "uuid": "eb0496f2-a8b7-49d2-bdc4-9727e7969aa0",
+                                                    "username": "jannik",
+                                                    "points": 0,
+                                                    "streak": 0,
+                                                    "emoji": "😝",
+                                                    "prev_points": 0,
+                                                    "loaded": false,
+                                                    "guessed": false,
+                                                    "disconnected": false,
+                                                    "game_state": "Lobby"
+                                                }
+                                            ],
+                                            "owner": "eb0496f2-a8b7-49d2-bdc4-9727e7969aa0"
+                                        }
+                                    } ))
+                                    .expect("can't fail"),
+                                ))
+                                .unwrap();
+                            room_id = Some(room)
+                        }
+                        Message::IncomingMsg { msg } => {
+                            websocket
+                                .write_message(tungstenite::Message::Text(
+                                    serde_json::to_string(&serde_json::json!( {
+                                        "type": "message",
+                                        "state": "chat",
+                                        "username": "jannik",
+                                        "uuid": "eb0496f2-a8b7-49d2-bdc4-9727e7969aa0",
+                                        "msg": msg,
+                                        "time_stamp": "Mar-25 09:42PM",
+                                    } ))
+                                    .expect("can't fail"),
+                                ))
+                                .unwrap();
+                        }
+                    }
+                }
+            });
+        }
+    });
+
     loop {
         let mut request = match server.recv() {
             Ok(x) => x,

@@ -275,7 +275,7 @@ fn main() {
                 {
                     match std::fs::read_to_string("frontend/room_TEMPLATE.html") {
                         Ok(html) => {
-                            let html = html.replace("ROOMID", room_id);
+                            let html = html.replace("ROOMID", room_id); // TODO: .replace("USERID");
                             request.respond(
                                 tiny_http::Response::from_data(html).with_header(
                                     tiny_http::Header::from_bytes("Content-Type", "text/html")
@@ -288,14 +288,14 @@ fn main() {
                                 .with_status_code(404),
                         ),
                     }
+                } else if let Ok(file) = std::fs::File::open(http_url_to_local_path(request.url()))
+                {
+                    request.respond(tiny_http::Response::from_file(file))
                 } else {
-                    match std::fs::File::open(http_url_to_local_path(request.url())) {
-                        Ok(file) => request.respond(tiny_http::Response::from_file(file)),
-                        Err(e) => request.respond(
-                            tiny_http::Response::from_string(format!("{}", e))
-                                .with_status_code(404),
-                        ),
-                    }
+                    let redirect_target = format!("https://guessthesong.io/{}", request.url());
+                    request.respond(tiny_http::Response::empty(302).with_header(
+                        tiny_http::Header::from_bytes("Location", redirect_target).unwrap(),
+                    ))
                 };
 
                 if let Err(e) = response_result {

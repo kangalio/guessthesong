@@ -1,7 +1,0 @@
-body {
-    overflow: auto !important;
-}
-
-table.dataTable tbody td {
-    vertical-align: middle;
-}

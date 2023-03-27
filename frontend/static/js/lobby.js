@@ -37,9 +37,9 @@ function playerJoinOrLeave(payload, owner) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    socket.onopen = (event) => {
-        socket.send(JSON.stringify({"type": "join", "room": room}));
-    };
+    // socket.onopen = (event) => {
+    //     socket.send(JSON.stringify({"type": "join", "room": room}));
+    // };
     socket.addEventListener("message", (event) => {
         const data = JSON.parse(event.data);
         if (data['state'] === 'join') {

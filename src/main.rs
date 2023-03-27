@@ -40,6 +40,7 @@ fn create_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty>
         params.insert(key, value);
     }
 
+    let username = params.get("username").copied().unwrap_or("");
     let id;
     {
         let mut rooms = state.rooms.lock();
@@ -52,7 +53,7 @@ fn create_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty>
                 Some(x) => Some(x.to_string()),
             },
             players: vec![Player {
-                name: params.get("username").copied().unwrap_or("").to_string(),
+                name: username.to_string(),
             }],
             explicit_songs: params.get("explicit").copied() == Some("y"),
             num_rounds: params
@@ -68,10 +69,57 @@ fn create_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty>
     }
 
     // TODO: don't hardcode the URL somehow
-    let redirect_header =
-        tiny_http::Header::from_bytes("Location", format!("http://127.0.0.1:5234/room/{}", id))
-            .expect("cant happen");
-    tiny_http::Response::empty(302).with_header(redirect_header)
+    tiny_http::Response::empty(302)
+        .with_header(
+            tiny_http::Header::from_bytes("Location", format!("http://127.0.0.1:5234/room/{}", id))
+                .expect("cant happen"),
+        )
+        .with_header(
+            tiny_http::Header::from_bytes("Set-Cookie", format!("user={}", username))
+                .expect("cant happen"),
+        )
+}
+
+fn join_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty> {
+    let mut params = std::collections::HashMap::new();
+    for kv_pair in body.split('&') {
+        let Some((key, value)) = kv_pair.split_once('=') else {
+            log::error!("invalid kv pair: {}", kv_pair);
+            continue;
+        };
+
+        params.insert(key, value);
+    }
+
+    let username = params.get("username").copied().unwrap_or("");
+    let room_id = params
+        .get("room_code")
+        .copied()
+        .unwrap()
+        .parse::<u32>()
+        .unwrap();
+
+    {
+        let mut rooms = state.rooms.lock();
+        let room = rooms.iter_mut().find(|r| r.id == room_id).unwrap();
+        room.players.push(Player {
+            name: username.to_string(),
+        })
+    }
+
+    // TODO: don't hardcode the URL somehow
+    tiny_http::Response::empty(302)
+        .with_header(
+            tiny_http::Header::from_bytes(
+                "Location",
+                format!("http://127.0.0.1:5234/room/{}", room_id),
+            )
+            .expect("cant happen"),
+        )
+        .with_header(
+            tiny_http::Header::from_bytes("Set-Cookie", format!("user={}", username))
+                .expect("cant happen"),
+        )
 }
 
 fn main() {
@@ -160,8 +208,15 @@ fn main() {
 
         let server = std::net::TcpListener::bind("0.0.0.0:9002").unwrap();
         for stream in server.incoming() {
+            let mut cookies = None;
             let mut websocket = match stream {
-                Ok(stream) => match tungstenite::accept(stream) {
+                Ok(stream) => match tungstenite::accept_hdr(
+                    stream,
+                    |req: &tungstenite::handshake::server::Request, res| {
+                        cookies = req.headers().get("Cookie").cloned();
+                        Ok(res)
+                    },
+                ) {
                     Ok(websocket) => websocket,
                     Err(e) => {
                         log::error!("websocket connection failed: {}", e);
@@ -173,12 +228,46 @@ fn main() {
                     continue;
                 }
             };
+            let username = cookies
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .split(";")
+                .find_map(|s| s.trim().strip_prefix("user="))
+                .unwrap()
+                .to_string();
+
+            websocket
+                .write_message(tungstenite::Message::Text(
+                    serde_json::to_string(&serde_json::json!( {
+                        "state": "joined",
+                        "payload": {
+                            "state": "player_data",
+                            "payload": [
+                                {
+                                    "uuid": "eb0496f2-a8b7-49d2-bdc4-9727e7969aa0",
+                                    "username": username,
+                                    "points": 0,
+                                    "streak": 0,
+                                    "emoji": "😝",
+                                    "prev_points": 0,
+                                    "loaded": false,
+                                    "guessed": false,
+                                    "disconnected": false,
+                                    "game_state": "Lobby"
+                                }
+                            ],
+                            "owner": "eb0496f2-a8b7-49d2-bdc4-9727e7969aa0"
+                        }
+                    } ))
+                    .expect("can't fail"),
+                ))
+                .unwrap();
 
             let state2 = state.clone();
             std::thread::spawn(move || {
                 let state = state2;
 
-                let mut room_id = None;
                 while let Ok(msg) = websocket.read_message() {
                     dbg!(&msg);
 
@@ -186,7 +275,6 @@ fn main() {
                     #[serde(tag = "type")]
                     #[serde(rename_all = "kebab-case")]
                     enum Message {
-                        Join { room: u32 },
                         IncomingMsg { msg: String },
                     }
 
@@ -206,42 +294,13 @@ fn main() {
 
                     dbg!(&msg);
                     match msg {
-                        Message::Join { room } => {
-                            websocket
-                                .write_message(tungstenite::Message::Text(
-                                    serde_json::to_string(&serde_json::json!( {
-                                        "state": "joined",
-                                        "payload": {
-                                            "state": "player_data",
-                                            "payload": [
-                                                {
-                                                    "uuid": "eb0496f2-a8b7-49d2-bdc4-9727e7969aa0",
-                                                    "username": "jannik",
-                                                    "points": 0,
-                                                    "streak": 0,
-                                                    "emoji": "😝",
-                                                    "prev_points": 0,
-                                                    "loaded": false,
-                                                    "guessed": false,
-                                                    "disconnected": false,
-                                                    "game_state": "Lobby"
-                                                }
-                                            ],
-                                            "owner": "eb0496f2-a8b7-49d2-bdc4-9727e7969aa0"
-                                        }
-                                    } ))
-                                    .expect("can't fail"),
-                                ))
-                                .unwrap();
-                            room_id = Some(room)
-                        }
                         Message::IncomingMsg { msg } => {
                             websocket
                                 .write_message(tungstenite::Message::Text(
                                     serde_json::to_string(&serde_json::json!( {
                                         "type": "message",
                                         "state": "chat",
-                                        "username": "jannik",
+                                        "username": username,
                                         "uuid": "eb0496f2-a8b7-49d2-bdc4-9727e7969aa0",
                                         "msg": msg,
                                         "time_stamp": "Mar-25 09:42PM",
@@ -273,9 +332,25 @@ fn main() {
             tiny_http::Method::Get => {
                 let response_result = if let Some((_, room_id)) = request.url().split_once("/room/")
                 {
-                    match std::fs::read_to_string("frontend/room_TEMPLATE.html") {
+                    match std::fs::read_to_string("frontend/room.html") {
                         Ok(html) => {
                             let html = html.replace("ROOMID", room_id); // TODO: .replace("USERID");
+                            request.respond(
+                                tiny_http::Response::from_data(html).with_header(
+                                    tiny_http::Header::from_bytes("Content-Type", "text/html")
+                                        .expect("can't fail"),
+                                ),
+                            )
+                        }
+                        Err(e) => request.respond(
+                            tiny_http::Response::from_string(format!("{}", e))
+                                .with_status_code(404),
+                        ),
+                    }
+                } else if let Some((_, room_id)) = request.url().split_once("/join/") {
+                    match std::fs::read_to_string("frontend/join.html") {
+                        Ok(html) => {
+                            let html = html.replace("ROOMID", room_id);
                             request.respond(
                                 tiny_http::Response::from_data(html).with_header(
                                     tiny_http::Header::from_bytes("Content-Type", "text/html")
@@ -305,6 +380,10 @@ fn main() {
             tiny_http::Method::Post => {
                 if request.url().contains("create-room") {
                     if let Err(e) = request.respond(create_room(&state, &body)) {
+                        log::error!("failed to send HTTP response: {}", e);
+                    }
+                } else if request.url().contains("join") {
+                    if let Err(e) = request.respond(join_room(&state, &body)) {
                         log::error!("failed to send HTTP response: {}", e);
                     }
                 }

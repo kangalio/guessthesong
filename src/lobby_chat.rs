@@ -52,35 +52,31 @@ pub fn listen(state: std::sync::Arc<crate::State>) {
                 .name
                 .clone();
             let owner_id = room.players.first().map_or("", |p| &p.id);
-            for player in room.players.iter() {
-                log::info!("{}", player.name);
-                websocket
-                    .write_message(tungstenite::Message::Text(
-                        serde_json::to_string(&serde_json::json!( {
-                            "state": "joined",
-                            "payload": {
-                                "state": "player_data",
-                                "payload": [
-                                    {
-                                        "uuid": player.id,
-                                        "username": player.name,
-                                        "points": 0,
-                                        "streak": 0,
-                                        "emoji": "😝",
-                                        "prev_points": 0,
-                                        "loaded": false,
-                                        "guessed": false,
-                                        "disconnected": false,
-                                        "game_state": "Lobby"
-                                    }
-                                ],
-                                "owner": owner_id,
-                            }
-                        } ))
-                        .expect("can't fail"),
-                    ))
-                    .unwrap();
-            }
+            std::thread::sleep(std::time::Duration::from_millis(200)); // HACK (to see traffic in firefox)
+            websocket
+                .write_message(tungstenite::Message::Text(
+                    serde_json::to_string(&serde_json::json!( {
+                        "state": "joined",
+                        "payload": {
+                            "state": "player_data",
+                            "payload": room.players.iter().map(|player| serde_json::json!( {
+                                "uuid": player.id,
+                                "username": player.name,
+                                "points": 0,
+                                "streak": 0,
+                                "emoji": "😝",
+                                "prev_points": 0,
+                                "loaded": false,
+                                "guessed": false,
+                                "disconnected": false,
+                                "game_state": "Lobby"
+                            } )).collect::<Vec<_>>(),
+                            "owner": owner_id,
+                        }
+                    } ))
+                    .expect("can't fail"),
+                ))
+                .unwrap();
         }
 
         let state2 = state.clone();

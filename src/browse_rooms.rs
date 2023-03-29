@@ -45,7 +45,7 @@ pub fn listen(state: std::sync::Arc<crate::State>) {
                     serde_json::to_string(&msg).expect("can't happen"),
                 )) {
                     log::info!(
-                        "Failed to send room data, stopping WebSocket connection: {}",
+                        "Stopping WebSocket connection: Failed to send room data: {}",
                         e
                     );
                     break;

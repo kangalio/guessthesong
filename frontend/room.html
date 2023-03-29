@@ -1161,7 +1161,7 @@ fadeInPage();
         else
             document.getElementById("roomURLPlaceholder").value = `https` + '://' + document.domain + ':' + location.port + '/join/' + room;
 
-        const socket = new WebSocket('ws://' + document.domain + ":9002");
+        const socket = new WebSocket('ws://' + document.domain + ":9002/" + room);
     </script>
 
 

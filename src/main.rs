@@ -1,5 +1,9 @@
+mod browse_rooms;
+mod lobby_chat;
+
 struct Player {
     name: String,
+    id: String,
 }
 
 struct Room {
@@ -11,10 +15,21 @@ struct Room {
     num_rounds: u32,
     round_time_secs: u32,
     created_at: std::time::Instant,
+    // No owner ID here: the first player is automatically owner
 }
 
-struct State {
+pub struct State {
     rooms: parking_lot::Mutex<Vec<Room>>,
+}
+
+fn gen_id() -> String {
+    thread_local! {
+        static START_TIME: std::time::Instant = std::time::Instant::now();
+    }
+    START_TIME
+        .with(|&start_time| std::time::Instant::now() - start_time)
+        .as_nanos()
+        .to_string()
 }
 
 fn http_url_to_local_path(url: &str) -> std::path::PathBuf {
@@ -41,6 +56,7 @@ fn create_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty>
     }
 
     let username = params.get("username").copied().unwrap_or("");
+    let user_id = gen_id();
     let id;
     {
         let mut rooms = state.rooms.lock();
@@ -54,6 +70,7 @@ fn create_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty>
             },
             players: vec![Player {
                 name: username.to_string(),
+                id: user_id.clone(),
             }],
             explicit_songs: params.get("explicit").copied() == Some("y"),
             num_rounds: params
@@ -75,7 +92,7 @@ fn create_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty>
                 .expect("cant happen"),
         )
         .with_header(
-            tiny_http::Header::from_bytes("Set-Cookie", format!("user={}", username))
+            tiny_http::Header::from_bytes("Set-Cookie", format!("user={}; Path=/", user_id))
                 .expect("cant happen"),
         )
 }
@@ -92,6 +109,7 @@ fn join_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty> {
     }
 
     let username = params.get("username").copied().unwrap_or("");
+    let user_id = gen_id();
     let room_id = params
         .get("room_code")
         .copied()
@@ -104,6 +122,7 @@ fn join_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty> {
         let room = rooms.iter_mut().find(|r| r.id == room_id).unwrap();
         room.players.push(Player {
             name: username.to_string(),
+            id: user_id.clone(),
         })
     }
 
@@ -117,7 +136,7 @@ fn join_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty> {
             .expect("cant happen"),
         )
         .with_header(
-            tiny_http::Header::from_bytes("Set-Cookie", format!("user={}", username))
+            tiny_http::Header::from_bytes("Set-Cookie", format!("user={}; Path=/", user_id))
                 .expect("cant happen"),
         )
 }
@@ -142,177 +161,12 @@ fn main() {
 
     let state2 = state.clone();
     std::thread::spawn(move || {
-        let state = state2;
-
-        let server = std::net::TcpListener::bind("0.0.0.0:9001").unwrap();
-        for stream in server.incoming() {
-            let mut websocket = match stream {
-                Ok(stream) => match tungstenite::accept(stream) {
-                    Ok(websocket) => websocket,
-                    Err(e) => {
-                        log::error!("websocket connection failed: {}", e);
-                        continue;
-                    }
-                },
-                Err(e) => {
-                    log::error!("websocket connection failed: {}", e);
-                    continue;
-                }
-            };
-
-            let state2 = state.clone();
-            std::thread::spawn(move || {
-                let state = state2;
-
-                loop {
-                    let rooms = state
-                        .rooms
-                        .lock()
-                        .iter()
-                        .map(|r| {
-                            serde_json::json!( {
-                                "code": r.id,
-                                "game_mode": "Themes",
-                                "idle": (std::time::Instant::now() - r.created_at).as_secs(),
-                                "name": &r.name,
-                                "players": r.players.len(),
-                                "status": if r.password.is_some() { "Private" } else { "Public" },
-                                "theme": "Random songs",
-                            } )
-                        })
-                        .collect::<Vec<_>>();
-                    let msg = serde_json::json!( {
-                        "state": "fetch_new",
-                        "msg": rooms,
-                    } );
-
-                    if let Err(e) = websocket.write_message(tungstenite::Message::Text(
-                        serde_json::to_string(&msg).expect("can't happen"),
-                    )) {
-                        log::info!(
-                            "Failed to send room data, stopping WebSocket connection: {}",
-                            e
-                        );
-                        break;
-                    }
-
-                    std::thread::sleep(std::time::Duration::from_secs(5));
-                }
-            });
-        }
+        browse_rooms::listen(state2);
     });
 
     let state2 = state.clone();
     std::thread::spawn(move || {
-        let state = state2;
-
-        let server = std::net::TcpListener::bind("0.0.0.0:9002").unwrap();
-        for stream in server.incoming() {
-            let mut cookies = None;
-            let mut websocket = match stream {
-                Ok(stream) => match tungstenite::accept_hdr(
-                    stream,
-                    |req: &tungstenite::handshake::server::Request, res| {
-                        cookies = req.headers().get("Cookie").cloned();
-                        Ok(res)
-                    },
-                ) {
-                    Ok(websocket) => websocket,
-                    Err(e) => {
-                        log::error!("websocket connection failed: {}", e);
-                        continue;
-                    }
-                },
-                Err(e) => {
-                    log::error!("websocket connection failed: {}", e);
-                    continue;
-                }
-            };
-            let username = cookies
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .split(";")
-                .find_map(|s| s.trim().strip_prefix("user="))
-                .unwrap()
-                .to_string();
-
-            websocket
-                .write_message(tungstenite::Message::Text(
-                    serde_json::to_string(&serde_json::json!( {
-                        "state": "joined",
-                        "payload": {
-                            "state": "player_data",
-                            "payload": [
-                                {
-                                    "uuid": "eb0496f2-a8b7-49d2-bdc4-9727e7969aa0",
-                                    "username": username,
-                                    "points": 0,
-                                    "streak": 0,
-                                    "emoji": "😝",
-                                    "prev_points": 0,
-                                    "loaded": false,
-                                    "guessed": false,
-                                    "disconnected": false,
-                                    "game_state": "Lobby"
-                                }
-                            ],
-                            "owner": "eb0496f2-a8b7-49d2-bdc4-9727e7969aa0"
-                        }
-                    } ))
-                    .expect("can't fail"),
-                ))
-                .unwrap();
-
-            let state2 = state.clone();
-            std::thread::spawn(move || {
-                let state = state2;
-
-                while let Ok(msg) = websocket.read_message() {
-                    dbg!(&msg);
-
-                    #[derive(serde::Deserialize, Debug)]
-                    #[serde(tag = "type")]
-                    #[serde(rename_all = "kebab-case")]
-                    enum Message {
-                        IncomingMsg { msg: String },
-                    }
-
-                    let msg: Message = match msg {
-                        tungstenite::Message::Text(msg) => match serde_json::from_str(&msg) {
-                            Ok(msg) => msg,
-                            Err(e) => {
-                                log::error!("malformed websocket message {:?}: {}", e, msg);
-                                continue;
-                            }
-                        },
-                        other => {
-                            log::info!("ignoring websocket message {:?}", other);
-                            continue;
-                        }
-                    };
-
-                    dbg!(&msg);
-                    match msg {
-                        Message::IncomingMsg { msg } => {
-                            websocket
-                                .write_message(tungstenite::Message::Text(
-                                    serde_json::to_string(&serde_json::json!( {
-                                        "type": "message",
-                                        "state": "chat",
-                                        "username": username,
-                                        "uuid": "eb0496f2-a8b7-49d2-bdc4-9727e7969aa0",
-                                        "msg": msg,
-                                        "time_stamp": "Mar-25 09:42PM",
-                                    } ))
-                                    .expect("can't fail"),
-                                ))
-                                .unwrap();
-                        }
-                    }
-                }
-            });
-        }
+        lobby_chat::listen(state2);
     });
 
     loop {
@@ -366,11 +220,13 @@ fn main() {
                 } else if let Ok(file) = std::fs::File::open(http_url_to_local_path(request.url()))
                 {
                     request.respond(tiny_http::Response::from_file(file))
-                } else {
+                } else if request.url().contains("/static") {
                     let redirect_target = format!("https://guessthesong.io/{}", request.url());
                     request.respond(tiny_http::Response::empty(302).with_header(
                         tiny_http::Header::from_bytes("Location", redirect_target).unwrap(),
                     ))
+                } else {
+                    request.respond(tiny_http::Response::empty(404))
                 };
 
                 if let Err(e) = response_result {

@@ -1,3 +1,46 @@
+use crate::redirect;
+
+pub fn get_room(
+    state: &crate::State,
+    request: &tiny_http::Request,
+    room_id_str: &str,
+) -> Result<tiny_http::Response<std::io::Cursor<Vec<u8>>>, tiny_http::Response<std::io::Empty>> {
+    let room_id_str = room_id_str.to_string();
+    let room_id = room_id_str
+        .parse::<u32>()
+        .map_err(|_| tiny_http::Response::empty(400))?;
+    let user_id = crate::extract_user_id_cookie(
+        request
+            .headers()
+            .iter()
+            .find(|h| h.field.equiv("Cookie"))
+            .ok_or_else(|| tiny_http::Response::empty(400))?
+            .value
+            .as_str(),
+    )
+    .map_err(|_| tiny_http::Response::empty(400))?;
+
+    {
+        let rooms = state.rooms.lock();
+        let room = rooms
+            .iter()
+            .find(|r| r.id == room_id)
+            .ok_or_else(|| redirect("http://127.0.0.1:5234/server-browser"))?;
+
+        room.players
+            .iter()
+            .find(|p| p.id == user_id)
+            .ok_or_else(|| redirect(&format!("http://127.0.0.1:5234/join/{}", room_id)))?;
+    };
+
+    let html = std::fs::read_to_string("frontend/room.html")
+        .map_err(|_| tiny_http::Response::empty(500))?;
+    let html = html.replace("ROOMID", &room_id_str); // TODO: .replace("USERID");
+    Ok(tiny_http::Response::from_data(html).with_header(
+        tiny_http::Header::from_bytes("Content-Type", "text/html").expect("can't fail"),
+    ))
+}
+
 pub fn http_400(msg: &str) -> tungstenite::handshake::server::ErrorResponse {
     let mut response = tungstenite::handshake::server::ErrorResponse::new(Some(msg.to_string()));
     *response.status_mut() = http::StatusCode::BAD_REQUEST;
@@ -93,9 +136,8 @@ pub fn listen(state: std::sync::Arc<crate::State>) {
                 .find(|r| r.id == room_id)
                 .expect("room was deleted inbetween websocket connection accept and first message");
             std::thread::sleep(std::time::Duration::from_millis(200)); // HACK (to see traffic in firefox)
-            websocket
-                .write_message(tungstenite::Message::Text(
-                    serde_json::to_string(&serde_json::json!( {
+            if let Err(e) = websocket.write_message(tungstenite::Message::Text(
+                serde_json::to_string(&serde_json::json!( {
                         "state": "joined",
                         "payload": {
                             "state": "player_data",
@@ -114,9 +156,11 @@ pub fn listen(state: std::sync::Arc<crate::State>) {
                             "owner": room.players.first().map_or("", |p| &p.id).to_string(),
                         }
                     } ))
-                    .expect("can't fail"),
-                ))
-                .unwrap();
+                .expect("can't fail"),
+            )) {
+                log::error!("can't even send initial websocket message: {}", e);
+                return;
+            }
         }
 
         let state2 = state.clone();
@@ -150,9 +194,8 @@ pub fn listen(state: std::sync::Arc<crate::State>) {
                 dbg!(&msg);
                 match msg {
                     Message::IncomingMsg { msg } => {
-                        websocket
-                            .write_message(tungstenite::Message::Text(
-                                serde_json::to_string(&serde_json::json!( {
+                        if let Err(e) = websocket.write_message(tungstenite::Message::Text(
+                            serde_json::to_string(&serde_json::json!( {
                                         "type": "message",
                                         "state": "chat",
                                         "username": username,
@@ -160,9 +203,11 @@ pub fn listen(state: std::sync::Arc<crate::State>) {
                                         "msg": msg,
                                         "time_stamp": "Mar-25 09:42PM",
                                     } ))
-                                .expect("can't fail"),
-                            ))
-                            .unwrap();
+                            .expect("can't fail"),
+                        )) {
+                            log::error!("can't send websocket message: {}", e);
+                            break;
+                        }
                     }
                 }
             }

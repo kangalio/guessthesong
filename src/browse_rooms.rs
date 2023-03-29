@@ -1,5 +1,6 @@
 pub fn listen(state: std::sync::Arc<crate::State>) {
-    let server = std::net::TcpListener::bind("0.0.0.0:9001").unwrap();
+    let server =
+        std::net::TcpListener::bind("0.0.0.0:9001").expect("fatal: can't open websocket server");
     for stream in server.incoming() {
         let mut websocket = match stream {
             Ok(stream) => match tungstenite::accept(stream) {

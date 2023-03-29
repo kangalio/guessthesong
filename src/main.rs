@@ -111,20 +111,33 @@ fn create_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty>
         )
 }
 
-fn join_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty> {
+fn redirect(target_url: &str) -> tiny_http::Response<std::io::Empty> {
+    tiny_http::Response::empty(302)
+        .with_header(tiny_http::Header::from_bytes("Location", target_url).expect("can't happen"))
+}
+
+fn join_room(
+    state: &State,
+    body: &str,
+) -> Result<tiny_http::Response<std::io::Empty>, tiny_http::Response<std::io::Empty>> {
     let params = parse_formdata(body);
-    let username = params.get("username").copied().unwrap_or("");
+    let username = params
+        .get("username")
+        .ok_or_else(|| tiny_http::Response::empty(400))?;
     let user_id = gen_id();
     let room_id = params
         .get("room_code")
         .copied()
-        .unwrap()
+        .ok_or_else(|| tiny_http::Response::empty(400))?
         .parse::<u32>()
-        .unwrap();
+        .map_err(|_| tiny_http::Response::empty(400))?;
 
     {
         let mut rooms = state.rooms.lock();
-        let room = rooms.iter_mut().find(|r| r.id == room_id).unwrap();
+        let room = rooms
+            .iter_mut()
+            .find(|r| r.id == room_id)
+            .ok_or_else(|| redirect("http://127.0.0.1:5234/server-browser"))?;
         room.players.push(Player {
             name: username.to_string(),
             id: user_id.clone(),
@@ -132,7 +145,7 @@ fn join_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty> {
     }
 
     // TODO: don't hardcode the URL somehow
-    tiny_http::Response::empty(302)
+    Ok(tiny_http::Response::empty(302)
         .with_header(
             tiny_http::Header::from_bytes(
                 "Location",
@@ -143,7 +156,7 @@ fn join_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty> {
         .with_header(
             tiny_http::Header::from_bytes("Set-Cookie", format!("user={}; Path=/", user_id))
                 .expect("cant happen"),
-        )
+        ))
 }
 
 fn main() {
@@ -192,70 +205,9 @@ fn main() {
                 let response_result = if let Some((_, room_id_str)) =
                     request.url().split_once("/room/")
                 {
-                    let room_id_str = room_id_str.to_string();
-                    let room_id = room_id_str.parse::<u32>().unwrap();
-                    let user_id = extract_user_id_cookie(
-                        request
-                            .headers()
-                            .iter()
-                            .find(|h| h.field.equiv("Cookie"))
-                            .unwrap()
-                            .value
-                            .as_str(),
-                    )
-                    .unwrap();
-
-                    {
-                        let rooms = state.rooms.lock();
-                        let Some(room) = rooms
-                            .iter()
-                            .find(|r| r.id == room_id) else {
-                                request
-                                    .respond(
-                                        tiny_http::Response::empty(302).with_header(
-                                            tiny_http::Header::from_bytes(
-                                                "Location",
-                                                "http://127.0.0.1:5234/server-browser",
-                                            )
-                                            .unwrap(),
-                                        ),
-                                    )
-                                    .unwrap();
-                                continue;
-                            };
-
-                        let Some(_) = room.players
-                            .iter()
-                            .find(|p| p.id == user_id) else {
-                                request
-                                    .respond(
-                                        tiny_http::Response::empty(302).with_header(
-                                            tiny_http::Header::from_bytes(
-                                                "Location",
-                                                format!("http://127.0.0.1:5234/join/{}", room_id),
-                                            )
-                                            .unwrap(),
-                                        ),
-                                    )
-                                    .unwrap();
-                                continue;
-                            };
-                    };
-
-                    match std::fs::read_to_string("frontend/room.html") {
-                        Ok(html) => {
-                            let html = html.replace("ROOMID", &room_id_str); // TODO: .replace("USERID");
-                            request.respond(
-                                tiny_http::Response::from_data(html).with_header(
-                                    tiny_http::Header::from_bytes("Content-Type", "text/html")
-                                        .expect("can't fail"),
-                                ),
-                            )
-                        }
-                        Err(e) => request.respond(
-                            tiny_http::Response::from_string(format!("{}", e))
-                                .with_status_code(404),
-                        ),
+                    match lobby_chat::get_room(&state, &request, room_id_str) {
+                        Ok(resp) => request.respond(resp),
+                        Err(resp) => request.respond(resp),
                     }
                 } else if let Some((_, room_id)) = request.url().split_once("/join/") {
                     match std::fs::read_to_string("frontend/join.html") {
@@ -278,9 +230,7 @@ fn main() {
                     request.respond(tiny_http::Response::from_file(file))
                 } else if request.url().contains("/static") {
                     let redirect_target = format!("https://guessthesong.io/{}", request.url());
-                    request.respond(tiny_http::Response::empty(302).with_header(
-                        tiny_http::Header::from_bytes("Location", redirect_target).unwrap(),
-                    ))
+                    request.respond(redirect(&redirect_target))
                 } else {
                     request.respond(tiny_http::Response::empty(404))
                 };
@@ -295,7 +245,11 @@ fn main() {
                         log::error!("failed to send HTTP response: {}", e);
                     }
                 } else if request.url().contains("join") {
-                    if let Err(e) = request.respond(join_room(&state, &body)) {
+                    let response = match join_room(&state, &body) {
+                        Ok(x) => x,
+                        Err(x) => x,
+                    };
+                    if let Err(e) = request.respond(response) {
                         log::error!("failed to send HTTP response: {}", e);
                     }
                 }

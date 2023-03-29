@@ -23,6 +23,13 @@ pub struct State {
     rooms: parking_lot::Mutex<Vec<Room>>,
 }
 
+fn extract_user_id_cookie(cookie_header: &str) -> Result<&str, &'static str> {
+    cookie_header
+        .split(";")
+        .find_map(|s| s.trim().strip_prefix("user="))
+        .ok_or_else(|| "missing user cookie")
+}
+
 fn gen_id() -> String {
     thread_local! {
         static START_TIME: std::time::Instant = std::time::Instant::now();
@@ -182,11 +189,62 @@ fn main() {
 
         match request.method() {
             tiny_http::Method::Get => {
-                let response_result = if let Some((_, room_id)) = request.url().split_once("/room/")
+                let response_result = if let Some((_, room_id_str)) =
+                    request.url().split_once("/room/")
                 {
+                    let room_id_str = room_id_str.to_string();
+                    let room_id = room_id_str.parse::<u32>().unwrap();
+                    let user_id = extract_user_id_cookie(
+                        request
+                            .headers()
+                            .iter()
+                            .find(|h| h.field.equiv("Cookie"))
+                            .unwrap()
+                            .value
+                            .as_str(),
+                    )
+                    .unwrap();
+
+                    {
+                        let rooms = state.rooms.lock();
+                        let Some(room) = rooms
+                            .iter()
+                            .find(|r| r.id == room_id) else {
+                                request
+                                    .respond(
+                                        tiny_http::Response::empty(302).with_header(
+                                            tiny_http::Header::from_bytes(
+                                                "Location",
+                                                "http://127.0.0.1:5234/server-browser",
+                                            )
+                                            .unwrap(),
+                                        ),
+                                    )
+                                    .unwrap();
+                                continue;
+                            };
+
+                        let Some(_) = room.players
+                            .iter()
+                            .find(|p| p.id == user_id) else {
+                                request
+                                    .respond(
+                                        tiny_http::Response::empty(302).with_header(
+                                            tiny_http::Header::from_bytes(
+                                                "Location",
+                                                format!("http://127.0.0.1:5234/join/{}", room_id),
+                                            )
+                                            .unwrap(),
+                                        ),
+                                    )
+                                    .unwrap();
+                                continue;
+                            };
+                    };
+
                     match std::fs::read_to_string("frontend/room.html") {
                         Ok(html) => {
-                            let html = html.replace("ROOMID", room_id); // TODO: .replace("USERID");
+                            let html = html.replace("ROOMID", &room_id_str); // TODO: .replace("USERID");
                             request.respond(
                                 tiny_http::Response::from_data(html).with_header(
                                     tiny_http::Header::from_bytes("Content-Type", "text/html")

@@ -1,21 +1,72 @@
+pub fn http_400(msg: &str) -> tungstenite::handshake::server::ErrorResponse {
+    let mut response = tungstenite::handshake::server::ErrorResponse::new(Some(msg.to_string()));
+    *response.status_mut() = http::StatusCode::BAD_REQUEST;
+    response
+}
+
+struct InitialRequest {
+    room_id: u32,
+    user_id: String,
+    username: String,
+}
+
+fn parse_initial_request(
+    state: &crate::State,
+    req: &tungstenite::handshake::server::Request,
+) -> Result<InitialRequest, tungstenite::handshake::server::ErrorResponse> {
+    let room_id = req
+        .uri()
+        .path()
+        .trim_start_matches("/")
+        .parse::<u32>()
+        .map_err(|_| http_400("bad path"))?;
+
+    let cookie_header = req
+        .headers()
+        .get("Cookie")
+        .ok_or_else(|| http_400("missing Cookie"))?
+        .to_str()
+        .map_err(|_| http_400("bad Cookie encoding"))?;
+    let user_id = crate::extract_user_id_cookie(cookie_header)
+        .map_err(http_400)?
+        .to_string();
+
+    let rooms = state.rooms.lock();
+    let room = rooms
+        .iter()
+        .find(|r| r.id == room_id)
+        .ok_or_else(|| http_400("that room doesn't exist"))?;
+    let username = room
+        .players
+        .iter()
+        .find(|p| p.id == user_id)
+        .ok_or_else(|| http_400("you haven't joined this room"))?
+        .name
+        .clone();
+
+    Ok(InitialRequest {
+        room_id,
+        user_id,
+        username,
+    })
+}
+
 pub fn listen(state: std::sync::Arc<crate::State>) {
-    let server = std::net::TcpListener::bind("0.0.0.0:9002").unwrap();
+    let server = std::net::TcpListener::bind("0.0.0.0:9002")
+        .expect("fatal: can't setup lobby websocket server");
     for stream in server.incoming() {
-        let mut room_id = None;
-        let mut cookies = None;
+        let mut req_data = None;
         let mut websocket = match stream {
             Ok(stream) => match tungstenite::accept_hdr(
                 stream,
-                |req: &tungstenite::handshake::server::Request, res| {
-                    room_id = Some(
-                        req.uri()
-                            .path()
-                            .trim_start_matches("/")
-                            .parse::<u32>()
-                            .unwrap(),
-                    );
-                    cookies = Some(req.headers().get("Cookie").unwrap().clone());
-                    Ok(res)
+                |req: &tungstenite::handshake::server::Request, res| match parse_initial_request(
+                    &state, req,
+                ) {
+                    Ok(x) => {
+                        req_data = Some(x);
+                        Ok(res)
+                    }
+                    Err(error_response) => Err(error_response),
                 },
             ) {
                 Ok(websocket) => websocket,
@@ -29,29 +80,18 @@ pub fn listen(state: std::sync::Arc<crate::State>) {
                 continue;
             }
         };
-        dbg!(&cookies);
-        let user_id = cookies
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .split(";")
-            .find_map(|s| s.trim().strip_prefix("user="))
-            .unwrap()
-            .to_string();
-        let room_id = room_id.unwrap();
+        let InitialRequest {
+            room_id,
+            user_id,
+            username,
+        } = req_data.expect("websocket request callback wasn't called");
 
-        let username;
         {
             let rooms = state.rooms.lock();
-            let room = rooms.iter().find(|r| r.id == room_id).unwrap();
-            username = room
-                .players
+            let room = rooms
                 .iter()
-                .find(|p| p.id == user_id)
-                .unwrap()
-                .name
-                .clone();
-            let owner_id = room.players.first().map_or("", |p| &p.id);
+                .find(|r| r.id == room_id)
+                .expect("room was deleted inbetween websocket connection accept and first message");
             std::thread::sleep(std::time::Duration::from_millis(200)); // HACK (to see traffic in firefox)
             websocket
                 .write_message(tungstenite::Message::Text(
@@ -71,7 +111,7 @@ pub fn listen(state: std::sync::Arc<crate::State>) {
                                 "disconnected": false,
                                 "game_state": "Lobby"
                             } )).collect::<Vec<_>>(),
-                            "owner": owner_id,
+                            "owner": room.players.first().map_or("", |p| &p.id).to_string(),
                         }
                     } ))
                     .expect("can't fail"),

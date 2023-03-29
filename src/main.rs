@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 mod browse_rooms;
 mod lobby_chat;
 
@@ -44,8 +45,9 @@ fn http_url_to_local_path(url: &str) -> std::path::PathBuf {
     path
 }
 
-fn create_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty> {
-    let mut params = std::collections::HashMap::new();
+fn parse_formdata(body: &str) -> HashMap<&str, &str> {
+    let mut params = HashMap::new();
+
     for kv_pair in body.split('&') {
         let Some((key, value)) = kv_pair.split_once('=') else {
             log::error!("invalid kv pair: {}", kv_pair);
@@ -55,6 +57,11 @@ fn create_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty>
         params.insert(key, value);
     }
 
+    params
+}
+
+fn create_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty> {
+    let params = parse_formdata(body);
     let username = params.get("username").copied().unwrap_or("");
     let user_id = gen_id();
     let id;
@@ -98,16 +105,7 @@ fn create_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty>
 }
 
 fn join_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty> {
-    let mut params = std::collections::HashMap::new();
-    for kv_pair in body.split('&') {
-        let Some((key, value)) = kv_pair.split_once('=') else {
-            log::error!("invalid kv pair: {}", kv_pair);
-            continue;
-        };
-
-        params.insert(key, value);
-    }
-
+    let params = parse_formdata(body);
     let username = params.get("username").copied().unwrap_or("");
     let user_id = gen_id();
     let room_id = params

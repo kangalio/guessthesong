@@ -184,7 +184,9 @@ fn main() {
 
     let state2 = state.clone();
     std::thread::spawn(move || {
-        lobby_chat::listen(state2);
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(lobby_chat::listen(state2));
     });
 
     loop {

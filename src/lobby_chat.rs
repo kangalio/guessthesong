@@ -1,3 +1,5 @@
+use futures::{SinkExt as _, StreamExt as _};
+
 use crate::redirect;
 
 pub fn get_room(
@@ -94,13 +96,14 @@ fn parse_initial_request(
     })
 }
 
-pub fn listen(state: std::sync::Arc<crate::State>) {
-    let server = std::net::TcpListener::bind("0.0.0.0:9002")
+pub async fn listen(state: std::sync::Arc<crate::State>) {
+    let server = tokio::net::TcpListener::bind("0.0.0.0:9002")
+        .await
         .expect("fatal: can't setup lobby websocket server");
-    for stream in server.incoming() {
+    loop {
         let mut req_data = None;
-        let mut websocket = match stream {
-            Ok(stream) => match tungstenite::accept_hdr(
+        let mut websocket = match server.accept().await {
+            Ok((stream, _)) => match tokio_tungstenite::accept_hdr_async(
                 stream,
                 |req: &tungstenite::handshake::server::Request, res| match parse_initial_request(
                     &state, req,
@@ -111,7 +114,9 @@ pub fn listen(state: std::sync::Arc<crate::State>) {
                     }
                     Err(error_response) => Err(error_response),
                 },
-            ) {
+            )
+            .await
+            {
                 Ok(websocket) => websocket,
                 Err(e) => {
                     log::error!("websocket connection failed: {}", e);
@@ -136,8 +141,9 @@ pub fn listen(state: std::sync::Arc<crate::State>) {
                 .find(|r| r.id == room_id)
                 .expect("room was deleted inbetween websocket connection accept and first message");
             std::thread::sleep(std::time::Duration::from_millis(200)); // HACK (to see traffic in firefox)
-            if let Err(e) = websocket.write_message(tungstenite::Message::Text(
-                serde_json::to_string(&serde_json::json!( {
+            if let Err(e) = websocket
+                .send(tungstenite::Message::Text(
+                    serde_json::to_string(&serde_json::json!( {
                         "state": "joined",
                         "payload": {
                             "state": "player_data",
@@ -156,18 +162,20 @@ pub fn listen(state: std::sync::Arc<crate::State>) {
                             "owner": room.players.first().map_or("", |p| &p.id).to_string(),
                         }
                     } ))
-                .expect("can't fail"),
-            )) {
+                    .expect("can't fail"),
+                ))
+                .await
+            {
                 log::error!("can't even send initial websocket message: {}", e);
                 return;
             }
         }
 
         let state2 = state.clone();
-        std::thread::spawn(move || {
+        tokio::spawn(async move {
             let state = state2;
 
-            while let Ok(msg) = websocket.read_message() {
+            while let Some(Ok(msg)) = websocket.next().await {
                 dbg!(&msg);
 
                 #[derive(serde::Deserialize, Debug)]
@@ -194,8 +202,9 @@ pub fn listen(state: std::sync::Arc<crate::State>) {
                 dbg!(&msg);
                 match msg {
                     Message::IncomingMsg { msg } => {
-                        if let Err(e) = websocket.write_message(tungstenite::Message::Text(
-                            serde_json::to_string(&serde_json::json!( {
+                        if let Err(e) = websocket
+                            .send(tungstenite::Message::Text(
+                                serde_json::to_string(&serde_json::json!( {
                                         "type": "message",
                                         "state": "chat",
                                         "username": username,
@@ -203,8 +212,10 @@ pub fn listen(state: std::sync::Arc<crate::State>) {
                                         "msg": msg,
                                         "time_stamp": "Mar-25 09:42PM",
                                     } ))
-                            .expect("can't fail"),
-                        )) {
+                                .expect("can't fail"),
+                            ))
+                            .await
+                        {
                             log::error!("can't send websocket message: {}", e);
                             break;
                         }

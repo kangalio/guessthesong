@@ -2,9 +2,15 @@ use std::collections::HashMap;
 mod browse_rooms;
 mod lobby_chat;
 
+type WebsocketWrite = futures::stream::SplitSink<
+    tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    tungstenite::Message,
+>;
+
 struct Player {
     name: String,
     id: String,
+    websocket: Option<std::sync::Arc<tokio::sync::Mutex<WebsocketWrite>>>,
 }
 
 struct Room {
@@ -85,6 +91,7 @@ fn create_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty>
             players: vec![Player {
                 name: username.to_string(),
                 id: user_id.clone(),
+                websocket: None,
             }],
             explicit_songs: params.get("explicit").copied() == Some("y"),
             num_rounds: params
@@ -141,6 +148,7 @@ fn join_room(
         room.players.push(Player {
             name: username.to_string(),
             id: user_id.clone(),
+            websocket: None,
         })
     }
 

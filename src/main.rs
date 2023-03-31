@@ -6,6 +6,8 @@ type WebsocketWrite = futures::stream::SplitSink<
     tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
     tungstenite::Message,
 >;
+type WebsocketRead =
+    futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>>;
 
 struct Player {
     name: String,

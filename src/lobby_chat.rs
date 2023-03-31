@@ -106,6 +106,83 @@ fn parse_initial_request(
     })
 }
 
+async fn ws_send_to_all(state: &crate::State, room_id: u32, msg: &impl serde::Serialize) {
+    let websockets = state
+        .rooms
+        .lock()
+        .iter()
+        .find(|r| r.id == room_id)
+        .unwrap()
+        .players
+        .iter()
+        .filter_map(|p| p.websocket.clone())
+        .collect::<Vec<_>>();
+    for websocket in websockets {
+        ws_send(&mut *websocket.lock().await, msg).await;
+    }
+}
+
+async fn ws_send(socket: &mut crate::WebsocketWrite, msg: impl serde::Serialize) {
+    let msg = tungstenite::Message::Text(serde_json::to_string(&msg).expect("can't fail"));
+    if let Err(e) = socket.send(msg).await {
+        log::error!("Failed to send WS message: {}", e);
+    }
+}
+
+async fn ws_recv<T: serde::de::DeserializeOwned>(socket: &mut crate::WebsocketRead) -> Option<T> {
+    while let Some(Ok(msg)) = socket.next().await {
+        match msg {
+            tungstenite::Message::Text(msg) => match serde_json::from_str(&msg) {
+                Ok(msg) => return msg,
+                Err(e) => {
+                    log::error!("malformed websocket message {:?}: {}", e, msg);
+                    continue;
+                }
+            },
+            other => {
+                log::info!("ignoring websocket message {:?}", other);
+                continue;
+            }
+        }
+    }
+
+    None
+}
+
+fn player_state_msg(state: &crate::State, room_id: u32) -> serde_json::Value {
+    let mut rooms = state.rooms.lock();
+    let room = rooms
+        .iter_mut()
+        .find(|r| r.id == room_id)
+        .expect("room was deleted inbetween websocket connection accept and first message");
+    serde_json::json!( {
+        "state": "join",
+        // "message": username, // What does this do again?
+        "payload": {
+            "state": "player_data",
+            "payload": room.players.iter().map(|player| serde_json::json!( {
+                "uuid": player.id,
+                "username": player.name,
+                "points": 0,
+                "streak": 0,
+                "emoji": "😝",
+                "prev_points": 0,
+                "loaded": false,
+                "guessed": false,
+                "disconnected": false,
+                "game_state": "Lobby"
+            } )).collect::<Vec<_>>(),
+            "owner": room.players.first().map_or("", |p| &p.id).to_string(),
+        }
+    } )
+}
+
+fn room(state: &crate::State, room_id: u32) -> impl std::ops::DerefMut<Target = crate::Room> + '_ {
+    parking_lot::MutexGuard::map(state.rooms.lock(), |rooms| {
+        rooms.iter_mut().find(|r| r.id == room_id).unwrap()
+    })
+}
+
 async fn lobby_ws(
     state: &crate::State,
     websocket: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
@@ -118,142 +195,41 @@ async fn lobby_ws(
     } = req_data;
     let (mut ws_write, mut ws_read) = websocket.split();
 
-    let (player_websockets, msg);
-    {
-        let mut rooms = state.rooms.lock();
-        let room = rooms
-            .iter_mut()
-            .find(|r| r.id == room_id)
-            .expect("room was deleted inbetween websocket connection accept and first message");
-        room.players
-            .iter_mut()
-            .find(|p| p.id == user_id)
-            .unwrap()
-            .websocket = Some(std::sync::Arc::new(tokio::sync::Mutex::new(ws_write)));
-
-        player_websockets = room
-            .players
-            .iter()
-            .filter_map(|p| p.websocket.clone())
-            .collect::<Vec<_>>();
-        msg = tungstenite::Message::Text(
-            serde_json::to_string(&serde_json::json!( {
-                "state": "join",
-                "message": username, // Yes this does something
-                "payload": {
-                    "state": "player_data",
-                    "payload": room.players.iter().map(|player| serde_json::json!( {
-                        "uuid": player.id,
-                        "username": player.name,
-                        "points": 0,
-                        "streak": 0,
-                        "emoji": "😝",
-                        "prev_points": 0,
-                        "loaded": false,
-                        "guessed": false,
-                        "disconnected": false,
-                        "game_state": "Lobby"
-                    } )).collect::<Vec<_>>(),
-                    "owner": room.players.first().map_or("", |p| &p.id).to_string(),
-                }
-            } ))
-            .expect("can't fail"),
-        );
-    };
+    room(state, room_id)
+        .players
+        .iter_mut()
+        .find(|p| p.id == user_id)
+        .unwrap()
+        .websocket = Some(std::sync::Arc::new(tokio::sync::Mutex::new(ws_write)));
 
     std::thread::sleep(std::time::Duration::from_millis(200)); // HACK (to see traffic in firefox)
-    for websocket in player_websockets {
-        websocket.lock().await.send(msg.clone()).await.unwrap();
+    ws_send_to_all(state, room_id, &player_state_msg(state, room_id)).await;
+
+    #[derive(serde::Deserialize, Debug)]
+    #[serde(tag = "type")]
+    #[serde(rename_all = "kebab-case")]
+    enum Message {
+        IncomingMsg { msg: String },
+        StartGame,
     }
-
-    while let Some(Ok(msg)) = ws_read.next().await {
-        dbg!(&msg);
-
-        #[derive(serde::Deserialize, Debug)]
-        #[serde(tag = "type")]
-        #[serde(rename_all = "kebab-case")]
-        enum Message {
-            IncomingMsg { msg: String },
-            StartGame,
-        }
-
-        let msg: Message = match msg {
-            tungstenite::Message::Text(msg) => match serde_json::from_str(&msg) {
-                Ok(msg) => msg,
-                Err(e) => {
-                    log::error!("malformed websocket message {:?}: {}", e, msg);
-                    continue;
-                }
-            },
-            other => {
-                log::info!("ignoring websocket message {:?}", other);
-                continue;
-            }
-        };
-
-        dbg!(&msg);
+    while let Some(msg) = ws_recv::<Message>(&mut ws_read).await {
         match msg {
             Message::IncomingMsg { msg } => {
-                let websockets = state
-                    .rooms
-                    .lock()
-                    .iter()
-                    .find(|r| r.id == room_id)
-                    .unwrap()
-                    .players
-                    .iter()
-                    .filter_map(|p| p.websocket.clone())
-                    .collect::<Vec<_>>();
-                for websocket in websockets {
-                    if let Err(e) = websocket
-                        .lock()
-                        .await
-                        .send(tungstenite::Message::Text(
-                            serde_json::to_string(&serde_json::json!( {
-                                "type": "message",
-                                "state": "chat",
-                                "username": username,
-                                "uuid": user_id,
-                                "msg": msg,
-                                "time_stamp": "Mar-25 09:42PM",
-                            } ))
-                            .expect("can't fail"),
-                        ))
-                        .await
-                    {
-                        log::error!("can't send websocket message: {}", e);
-                        break;
-                    }
-                }
+                let msg = serde_json::json!( {
+                    "type": "message",
+                    "state": "chat",
+                    "username": username,
+                    "uuid": user_id,
+                    "msg": msg,
+                    "time_stamp": "Mar-25 09:42PM",
+                } );
+                ws_send_to_all(state, room_id, &msg).await;
             }
             Message::StartGame => {
-                let websockets = state
-                    .rooms
-                    .lock()
-                    .iter()
-                    .find(|r| r.id == room_id)
-                    .unwrap()
-                    .players
-                    .iter()
-                    .filter_map(|p| p.websocket.clone())
-                    .collect::<Vec<_>>();
-                for websocket in websockets {
-                    websocket
-                        .lock()
-                        .await
-                        .send(tungstenite::Message::Text(
-                            serde_json::to_string(&serde_json::json!( {
-                                "state": "start_game",
-                            } ))
-                            .unwrap(),
-                        ))
-                        .await
-                        .unwrap();
-                }
-
+                let msg = serde_json::json!( { "state": "start_game" } );
+                ws_send_to_all(state, room_id, &msg).await;
                 {
-                    let mut rooms = state.rooms.lock();
-                    let room = rooms.iter_mut().find(|r| r.id == room_id).unwrap();
+                    let mut room = room(state, room_id);
                     room.state = crate::RoomState::Play;
                     for player in &mut room.players {
                         player.websocket = None;
@@ -276,132 +252,38 @@ async fn ingame_ws(
     } = req_data;
     let (mut ws_write, mut ws_read) = websocket.split();
 
-    let player_websockets;
-    let msg = {
-        let mut rooms = state.rooms.lock();
-        let room = rooms
-            .iter_mut()
-            .find(|r| r.id == room_id)
-            .expect("room was deleted inbetween websocket connection accept and first message");
-        player_websockets = room
-            .players
-            .iter()
-            .filter_map(|p| p.websocket.clone())
-            .collect::<Vec<_>>();
-        tungstenite::Message::Text(
-            serde_json::to_string(&serde_json::json!( {
-                "state": "join",
-                "message": username, // Yes this does something
-                "payload": {
-                    "state": "player_data",
-                    "payload": room.players.iter().map(|player| serde_json::json!( {
-                        "uuid": player.id,
-                        "username": player.name,
-                        "points": 0,
-                        "streak": 0,
-                        "emoji": "😝",
-                        "prev_points": 0,
-                        "loaded": false,
-                        "guessed": false,
-                        "disconnected": false,
-                        "game_state": "Lobby"
-                    } )).collect::<Vec<_>>(),
-                    "owner": room.players.first().map_or("", |p| &p.id).to_string(),
-                }
-            } ))
-            .expect("can't fail"),
-        )
-    };
-
     std::thread::sleep(std::time::Duration::from_millis(200)); // HACK (to see traffic in firefox)
-    ws_write.send(msg).await.unwrap();
+    ws_send(&mut ws_write, player_state_msg(state, room_id)).await;
+    ws_send(&mut ws_write, serde_json::json!( { "state": "new_turn" } )).await;
+    ws_send(&mut ws_write, serde_json::json!( { "state": "loading" } )).await;
 
-    let msg = tungstenite::Message::Text(
-        serde_json::to_string(&serde_json::json!( {
-                "state": "new_turn",
-            } ))
-        .expect("can't fail"),
-    );
-    ws_write.send(msg).await.unwrap();
+    room(state, room_id)
+        .players
+        .iter_mut()
+        .find(|p| p.id == user_id)
+        .unwrap()
+        .websocket = Some(std::sync::Arc::new(tokio::sync::Mutex::new(ws_write)));
 
-    let msg = tungstenite::Message::Text(
-        serde_json::to_string(&serde_json::json!( {
-                "state": "loading",
-            } ))
-        .expect("can't fail"),
-    );
-    ws_write.send(msg).await.unwrap();
-
-    {
-        let mut rooms = state.rooms.lock();
-        let room = rooms.iter_mut().find(|r| r.id == room_id).unwrap();
-        room.players
-            .iter_mut()
-            .find(|p| p.id == user_id)
-            .unwrap()
-            .websocket = Some(std::sync::Arc::new(tokio::sync::Mutex::new(ws_write)));
+    #[derive(serde::Deserialize, Debug)]
+    #[serde(tag = "type")]
+    #[serde(rename_all = "kebab-case")]
+    enum Message {
+        IncomingMsg { msg: String },
+        TypingStatus { typing: bool },
+        AudioLoaded,
     }
-
-    while let Some(Ok(msg)) = ws_read.next().await {
-        dbg!(&msg);
-
-        #[derive(serde::Deserialize, Debug)]
-        #[serde(tag = "type")]
-        #[serde(rename_all = "kebab-case")]
-        enum Message {
-            IncomingMsg { msg: String },
-            TypingStatus { typing: bool },
-            AudioLoaded,
-        }
-
-        let msg: Message = match msg {
-            tungstenite::Message::Text(msg) => match serde_json::from_str(&msg) {
-                Ok(msg) => msg,
-                Err(e) => {
-                    log::error!("malformed websocket message {:?}: {}", e, msg);
-                    continue;
-                }
-            },
-            other => {
-                log::info!("ignoring websocket message {:?}", other);
-                continue;
-            }
-        };
-
-        dbg!(&msg);
+    while let Some(msg) = ws_recv::<Message>(&mut ws_read).await {
         match msg {
             Message::IncomingMsg { msg } => {
-                let websockets = state
-                    .rooms
-                    .lock()
-                    .iter()
-                    .find(|r| r.id == room_id)
-                    .unwrap()
-                    .players
-                    .iter()
-                    .filter_map(|p| p.websocket.clone())
-                    .collect::<Vec<_>>();
-                for websocket in websockets {
-                    if let Err(e) = websocket
-                        .lock()
-                        .await
-                        .send(tungstenite::Message::Text(
-                            serde_json::to_string(&serde_json::json!( {
-                                "type": "message",
-                                "state": "chat",
-                                "username": username,
-                                "uuid": user_id,
-                                "msg": msg,
-                                "time_stamp": "Mar-25 09:42PM",
-                            } ))
-                            .expect("can't fail"),
-                        ))
-                        .await
-                    {
-                        log::error!("can't send websocket message: {}", e);
-                        break;
-                    }
-                }
+                let msg = serde_json::json!( {
+                    "type": "message",
+                    "state": "chat",
+                    "username": username,
+                    "uuid": user_id,
+                    "msg": msg,
+                    "time_stamp": "Mar-25 09:42PM",
+                } );
+                ws_send_to_all(state, room_id, &msg).await;
             }
             Message::TypingStatus { typing: _ } => {
                 // STUB
@@ -447,13 +329,7 @@ pub async fn listen(state: std::sync::Arc<crate::State>) {
         };
         let req_data = req_data.expect("websocket request callback wasn't called");
 
-        let room_state = state
-            .rooms
-            .lock()
-            .iter()
-            .find(|r| r.id == req_data.room_id)
-            .unwrap()
-            .state;
+        let room_state = room(&state, req_data.room_id).state;
         let state2 = state.clone();
         tokio::spawn(async move {
             match room_state {

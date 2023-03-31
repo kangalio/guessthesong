@@ -13,6 +13,12 @@ struct Player {
     websocket: Option<std::sync::Arc<tokio::sync::Mutex<WebsocketWrite>>>,
 }
 
+#[derive(Clone, Copy)]
+enum RoomState {
+    Lobby,
+    Play,
+}
+
 struct Room {
     name: String,
     id: u32,
@@ -22,6 +28,7 @@ struct Room {
     num_rounds: u32,
     round_time_secs: u32,
     created_at: std::time::Instant,
+    state: RoomState,
     // No owner ID here: the first player is automatically owner
 }
 
@@ -103,6 +110,7 @@ fn create_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty>
                 .and_then(|x| x.parse().ok())
                 .unwrap_or(75),
             created_at: std::time::Instant::now(),
+            state: RoomState::Lobby,
         });
     }
 
@@ -182,6 +190,7 @@ fn main() {
             num_rounds: 9,
             round_time_secs: 75,
             created_at: std::time::Instant::now(),
+            state: RoomState::Lobby,
         }]),
     });
 

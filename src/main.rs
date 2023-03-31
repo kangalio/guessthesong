@@ -221,63 +221,57 @@ fn main() {
             log::error!("failed to read request body: {}", e);
         }
 
-        match request.method() {
-            tiny_http::Method::Get => {
-                let response_result = if let Some((_, room_id_str)) =
-                    request.url().split_once("/room/")
-                {
-                    match lobby_chat::get_room(&state, &request, room_id_str) {
-                        Ok(resp) => request.respond(resp),
-                        Err(resp) => request.respond(resp),
-                    }
-                } else if let Some((_, room_id)) = request.url().split_once("/join/") {
-                    match std::fs::read_to_string("frontend/join.html") {
-                        Ok(html) => {
-                            let html = html.replace("ROOMID", room_id);
-                            request.respond(
-                                tiny_http::Response::from_data(html).with_header(
-                                    tiny_http::Header::from_bytes("Content-Type", "text/html")
-                                        .expect("can't fail"),
-                                ),
-                            )
-                        }
-                        Err(e) => request.respond(
-                            tiny_http::Response::from_string(format!("{}", e))
-                                .with_status_code(404),
+        let parts = request
+            .url()
+            .trim_start_matches('/')
+            .split('/')
+            .collect::<Vec<_>>();
+        // Can't factor out request.respond() because the response's are different types
+        use tiny_http::Method::{Get, Post};
+        let response_result = match (request.method(), &*parts) {
+            (Post, ["create-room"]) => request.respond(create_room(&state, &body)),
+            (Get, ["room", room_id_str]) => {
+                match lobby_chat::get_room(&state, &request, room_id_str) {
+                    Ok(resp) => request.respond(resp),
+                    Err(resp) => request.respond(resp),
+                }
+            }
+            (Get, ["join", room_id_str]) => match std::fs::read_to_string("frontend/join.html") {
+                Ok(html) => {
+                    let html = html.replace("ROOMID", room_id_str);
+                    request.respond(
+                        tiny_http::Response::from_data(html).with_header(
+                            tiny_http::Header::from_bytes("Content-Type", "text/html")
+                                .expect("can't fail"),
                         ),
-                    }
-                } else if let Ok(file) = std::fs::File::open(http_url_to_local_path(request.url()))
-                {
+                    )
+                }
+                Err(e) => request.respond(
+                    tiny_http::Response::from_string(format!("{}", e)).with_status_code(404),
+                ),
+            },
+            (Post, ["join", ..]) => match join_room(&state, &body) {
+                Ok(resp) => request.respond(resp),
+                Err(resp) => request.respond(resp),
+            },
+            (Get, _) => {
+                if let Ok(file) = std::fs::File::open(http_url_to_local_path(request.url())) {
                     request.respond(tiny_http::Response::from_file(file))
                 } else if request.url().contains("/static") {
                     let redirect_target = format!("https://guessthesong.io/{}", request.url());
                     request.respond(redirect(&redirect_target))
                 } else {
                     request.respond(tiny_http::Response::empty(404))
-                };
+                }
+            }
+            (other, _) => {
+                log::info!("unexpected HTTP method: {}", other);
+                request.respond(tiny_http::Response::empty(400))
+            }
+        };
 
-                if let Err(e) = response_result {
-                    log::error!("failed to send HTTP response: {}", e);
-                }
-            }
-            tiny_http::Method::Post => {
-                if request.url().contains("create-room") {
-                    if let Err(e) = request.respond(create_room(&state, &body)) {
-                        log::error!("failed to send HTTP response: {}", e);
-                    }
-                } else if request.url().contains("join") {
-                    let response = match join_room(&state, &body) {
-                        Ok(x) => x,
-                        Err(x) => x,
-                    };
-                    if let Err(e) = request.respond(response) {
-                        log::error!("failed to send HTTP response: {}", e);
-                    }
-                }
-            }
-            other => {
-                log::error!("unknown HTTP method: {}", other);
-            }
+        if let Err(e) = response_result {
+            log::error!("failed to send HTTP response: {}", e);
         }
     }
 }

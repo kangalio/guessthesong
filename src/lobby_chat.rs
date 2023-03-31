@@ -139,6 +139,7 @@ async fn ws_recv<T: serde::de::DeserializeOwned>(socket: &mut crate::WebsocketRe
                     continue;
                 }
             },
+            tungstenite::Message::Close(_) => break,
             other => {
                 log::info!("ignoring websocket message {:?}", other);
                 continue;

@@ -16,5 +16,6 @@ env_logger = "0.10.0"
 log = "0.4.17"
 serde = { version = "1.0", features = ["derive"] }
 http = "0.2.8" # To interact with tungstenite
-tokio = { version = "1.27.0", features = ["net", "rt", "rt-multi-thread", "sync"] }
+tokio = { version = "1.27.0", features = ["net", "rt", "rt-multi-thread", "sync", "time"] }
 futures = "0.3.27" # to interact with tokio-tungstenite
+fastrand = "1.9.0"

@@ -35,7 +35,7 @@ pub fn get_room(
             .find(|p| p.id == user_id)
             .ok_or_else(|| redirect(&format!("http://127.0.0.1:5234/join/{}", room_id)))?;
 
-        room_state = room.state;
+        room_state = room.state.clone();
     };
 
     let html = match room_state {
@@ -43,7 +43,7 @@ pub fn get_room(
             .map_err(|_| tiny_http::Response::empty(500))?
             .replace("ROOMID", &room_id_str)
             .replace("USERID", user_id),
-        crate::RoomState::Play => std::fs::read_to_string("frontend/roomPLAY.html")
+        crate::RoomState::Play { .. } => std::fs::read_to_string("frontend/roomPLAY.html")
             .map_err(|_| tiny_http::Response::empty(500))?
             .replace("ROOMID", &room_id_str)
             .replace("PLAYERID", user_id),
@@ -59,6 +59,7 @@ pub fn http_400(msg: &str) -> tungstenite::handshake::server::ErrorResponse {
     response
 }
 
+#[derive(Clone)]
 struct InitialRequest {
     room_id: u32,
     user_id: String,
@@ -125,7 +126,10 @@ async fn ws_send_to_all(state: &crate::State, room_id: u32, msg: &impl serde::Se
 async fn ws_send(socket: &mut crate::WebsocketWrite, msg: impl serde::Serialize) {
     let msg = tungstenite::Message::Text(serde_json::to_string(&msg).expect("can't fail"));
     if let Err(e) = socket.send(msg).await {
-        log::error!("Failed to send WS message: {}", e);
+        match e {
+            tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed => {}
+            e => log::error!("Failed to send WS message: {}", e),
+        }
     }
 }
 
@@ -168,7 +172,7 @@ fn player_state_msg(state: &crate::State, room_id: u32) -> serde_json::Value {
                 "streak": 0,
                 "emoji": "😝",
                 "prev_points": 0,
-                "loaded": false,
+                "loaded": player.loaded,
                 "guessed": false,
                 "disconnected": false,
                 "game_state": "Lobby"
@@ -184,6 +188,37 @@ fn room(state: &crate::State, room_id: u32) -> impl std::ops::DerefMut<Target = 
     })
 }
 
+fn player<'a>(
+    state: &'a crate::State,
+    room_id: u32,
+    player_id: &str,
+) -> impl std::ops::DerefMut<Target = crate::Player> + 'a {
+    parking_lot::MutexGuard::map(state.rooms.lock(), |rooms| {
+        rooms
+            .iter_mut()
+            .find(|r| r.id == room_id)
+            .unwrap()
+            .players
+            .iter_mut()
+            .find(|p| p.id == player_id)
+            .unwrap()
+    })
+}
+
+/// Returns title and path
+fn select_random_song() -> crate::Song {
+    let songs = std::fs::read_dir("/home/kangalioo/audio/maikel6311/nightcore/mp3/")
+        .unwrap()
+        .collect::<Vec<_>>();
+    let random_index = crate::nanos_since_startup() % songs.len() as u128;
+    let path = songs[random_index as usize].as_ref().unwrap().path();
+
+    let title = path.file_name().unwrap().to_string_lossy();
+    let title = title[..title.rfind('.').unwrap_or(title.len())].to_string();
+
+    crate::Song { path, title }
+}
+
 async fn lobby_ws(
     state: &crate::State,
     websocket: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
@@ -194,7 +229,7 @@ async fn lobby_ws(
         user_id,
         username,
     } = req_data;
-    let (mut ws_write, mut ws_read) = websocket.split();
+    let (ws_write, mut ws_read) = websocket.split();
 
     room(state, room_id)
         .players
@@ -227,6 +262,8 @@ async fn lobby_ws(
                 ws_send_to_all(state, room_id, &msg).await;
             }
             Message::StartGame => {
+                room(state, room_id).current_song = Some(select_random_song());
+
                 let msg = serde_json::json!( { "state": "start_game" } );
                 ws_send_to_all(state, room_id, &msg).await;
                 {
@@ -241,8 +278,132 @@ async fn lobby_ws(
     }
 }
 
+fn generate_hints(title: &str, num_steps: usize) -> (String, Vec<String>) {
+    fn blank_out_indices(s: &str, indices: &[usize]) -> String {
+        s.chars()
+            .enumerate()
+            .map(|(i, c)| if indices.contains(&i) { '_' } else { c })
+            .collect()
+    }
+
+    let mut indices_hidden = Vec::new();
+    for (i, c) in title.chars().enumerate() {
+        if c.is_alphanumeric() {
+            indices_hidden.push(i);
+        }
+    }
+    let all_blanked_out = blank_out_indices(title, &indices_hidden);
+
+    let mut hints = Vec::new();
+
+    let mut num_hidden = indices_hidden.len() as f32;
+    let num_revealed_per_step = num_hidden / 2.0 / num_steps as f32;
+    for _ in 0..num_steps {
+        num_hidden -= num_revealed_per_step;
+        while indices_hidden.len() as f32 > num_hidden {
+            indices_hidden.remove(fastrand::usize(..indices_hidden.len()));
+        }
+
+        hints.push(blank_out_indices(title, &indices_hidden));
+    }
+
+    (all_blanked_out, hints)
+}
+
+async fn single_round(state: &crate::State, req_data: InitialRequest) {
+    let InitialRequest {
+        room_id,
+        user_id: _,
+        username: _,
+    } = req_data;
+
+    let song_title = room(state, room_id)
+        .current_song
+        .as_ref()
+        .unwrap()
+        .title
+        .clone();
+    let round_time = room(state, room_id).round_time_secs;
+
+    let hints_at = (10..u32::min(round_time, 70)).step_by(10).rev();
+    let (mut current_hint, hints) = generate_hints(&song_title, hints_at.len());
+    let mut hints_at = hints_at
+        .zip(hints)
+        .collect::<std::collections::HashMap<_, _>>();
+
+    tokio::time::sleep(std::time::Duration::from_millis(4000)).await;
+    for timer in (0..=(round_time + 3)).rev() {
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        if room(state, room_id).players.iter().all(|p| p.guessed) {
+            break;
+        }
+
+        if let Some(new_hint) = hints_at.remove(&timer) {
+            current_hint = new_hint;
+        }
+
+        let msg = serde_json::json!( {
+            "state": "timer",
+            "message": timer,
+            "hint": current_hint,
+            "scores": room(state, room_id).players.iter().map(|p| serde_json::json!( {
+                "uuid": p.id,
+                "username": p.name,
+                "points": p.points,
+                "streak": 0,
+                "emoji": "😝",
+                "prev_points": 0,
+                "loaded": false,
+                "guessed": false,
+                "disconnected": false,
+                "game_state": "In game"
+            } )).collect::<Vec<_>>(),
+            "round_time": round_time
+        } );
+        ws_send_to_all(&state, room_id, &msg).await;
+    }
+
+    {
+        let mut room = room(state, room_id);
+        room.current_song = Some(select_random_song());
+        for p in &mut room.players {
+            p.loaded = false;
+            p.guessed = false;
+        }
+    }
+
+    let msg = serde_json::json!( {
+        "state": "notify",
+        "message": format!("The song was: {}", song_title),
+        "type": "info",
+    } );
+    ws_send_to_all(&state, room_id, &msg).await;
+
+    let msg = serde_json::json!( {
+        "state": "new_turn",
+    } );
+    ws_send_to_all(&state, room_id, &msg).await;
+
+    let msg = serde_json::json!( {
+        "state": "scoreboard",
+        "payload": room(state, room_id).players.iter().map(|p| serde_json::json!( {
+            "uuid": p.id,
+            "display_name": p.name,
+            "points": p.points,
+            "point_diff": 0,
+            "prev_points": 0,
+            "streak": 0
+        } )).collect::<Vec<_>>(),
+        "round": 1,
+        "max_rounds": room(state, room_id).num_rounds,
+        "turn": 0,
+        "max_turn": 1
+    } );
+    ws_send_to_all(&state, room_id, &msg).await;
+}
+
 async fn ingame_ws(
-    state: &crate::State,
+    state: std::sync::Arc<crate::State>,
     websocket: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
     req_data: InitialRequest,
 ) {
@@ -250,15 +411,15 @@ async fn ingame_ws(
         room_id,
         user_id,
         username,
-    } = req_data;
+    } = req_data.clone();
     let (mut ws_write, mut ws_read) = websocket.split();
 
     std::thread::sleep(std::time::Duration::from_millis(200)); // HACK (to see traffic in firefox)
-    ws_send(&mut ws_write, player_state_msg(state, room_id)).await;
+    ws_send(&mut ws_write, player_state_msg(&state, room_id)).await;
     ws_send(&mut ws_write, serde_json::json!( { "state": "new_turn" } )).await;
     ws_send(&mut ws_write, serde_json::json!( { "state": "loading" } )).await;
 
-    room(state, room_id)
+    room(&state, room_id)
         .players
         .iter_mut()
         .find(|p| p.id == user_id)
@@ -276,21 +437,47 @@ async fn ingame_ws(
     while let Some(msg) = ws_recv::<Message>(&mut ws_read).await {
         match msg {
             Message::IncomingMsg { msg } => {
-                let msg = serde_json::json!( {
-                    "type": "message",
-                    "state": "chat",
-                    "username": username,
-                    "uuid": user_id,
-                    "msg": msg,
-                    "time_stamp": "Mar-25 09:42PM",
-                } );
-                ws_send_to_all(state, room_id, &msg).await;
+                if msg.to_lowercase()
+                    == room(&state, room_id)
+                        .current_song
+                        .as_ref()
+                        .unwrap()
+                        .title
+                        .to_lowercase()
+                {
+                    room(&state, room_id)
+                        .players
+                        .iter_mut()
+                        .find(|p| p.id == user_id)
+                        .unwrap()
+                        .guessed = true;
+                } else {
+                    let msg = serde_json::json!( {
+                        "type": "message",
+                        "state": "chat",
+                        "username": username,
+                        "uuid": user_id,
+                        "msg": msg,
+                        "time_stamp": "Mar-25 09:42PM",
+                    } );
+                    ws_send_to_all(&state, room_id, &msg).await;
+                }
             }
             Message::TypingStatus { typing: _ } => {
                 // STUB
             }
             Message::AudioLoaded => {
-                // STUB
+                player(&state, room_id, &user_id).loaded = true;
+                ws_send_to_all(&state, room_id, &player_state_msg(&state, room_id)).await;
+
+                let everyone_loaded = room(&state, room_id).players.iter().all(|p| p.loaded);
+                if everyone_loaded {
+                    let state = state.clone();
+                    let req_data = req_data.clone();
+                    tokio::spawn(async move {
+                        single_round(&state, req_data).await;
+                    });
+                }
             }
         }
     }
@@ -330,12 +517,12 @@ pub async fn listen(state: std::sync::Arc<crate::State>) {
         };
         let req_data = req_data.expect("websocket request callback wasn't called");
 
-        let room_state = room(&state, req_data.room_id).state;
+        let room_state = room(&state, req_data.room_id).state.clone();
         let state2 = state.clone();
         tokio::spawn(async move {
             match room_state {
                 crate::RoomState::Lobby => lobby_ws(&state2, ws, req_data).await,
-                crate::RoomState::Play => ingame_ws(&state2, ws, req_data).await,
+                crate::RoomState::Play { .. } => ingame_ws(state2, ws, req_data).await,
             }
         });
     }

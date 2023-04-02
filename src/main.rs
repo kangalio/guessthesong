@@ -12,13 +12,21 @@ type WebsocketRead =
 struct Player {
     name: String,
     id: String,
+    loaded: bool,
+    guessed: bool,
+    points: u32,
     websocket: Option<std::sync::Arc<tokio::sync::Mutex<WebsocketWrite>>>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum RoomState {
     Lobby,
     Play,
+}
+
+struct Song {
+    path: std::path::PathBuf,
+    title: String,
 }
 
 struct Room {
@@ -31,6 +39,7 @@ struct Room {
     round_time_secs: u32,
     created_at: std::time::Instant,
     state: RoomState,
+    current_song: Option<Song>,
     // No owner ID here: the first player is automatically owner
 }
 
@@ -45,14 +54,17 @@ fn extract_user_id_cookie(cookie_header: &str) -> Result<&str, &'static str> {
         .ok_or_else(|| "missing user cookie")
 }
 
-fn gen_id() -> String {
+fn nanos_since_startup() -> u128 {
     thread_local! {
         static START_TIME: std::time::Instant = std::time::Instant::now();
     }
     START_TIME
         .with(|&start_time| std::time::Instant::now() - start_time)
         .as_nanos()
-        .to_string()
+}
+
+fn gen_id() -> String {
+    nanos_since_startup().to_string()
 }
 
 fn http_url_to_local_path(url: &str) -> std::path::PathBuf {
@@ -100,6 +112,9 @@ fn create_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty>
             players: vec![Player {
                 name: username.to_string(),
                 id: user_id.clone(),
+                loaded: false,
+                guessed: false,
+                points: 0,
                 websocket: None,
             }],
             explicit_songs: params.get("explicit").copied() == Some("y"),
@@ -113,6 +128,7 @@ fn create_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty>
                 .unwrap_or(75),
             created_at: std::time::Instant::now(),
             state: RoomState::Lobby,
+            current_song: None,
         });
     }
 
@@ -158,6 +174,9 @@ fn join_room(
         room.players.push(Player {
             name: username.to_string(),
             id: user_id.clone(),
+            loaded: false,
+            guessed: false,
+            points: 0,
             websocket: None,
         })
     }
@@ -193,6 +212,7 @@ fn main() {
             round_time_secs: 75,
             created_at: std::time::Instant::now(),
             state: RoomState::Lobby,
+            current_song: None,
         }]),
     });
 
@@ -226,6 +246,7 @@ fn main() {
             .trim_start_matches('/')
             .split('/')
             .collect::<Vec<_>>();
+        dbg!(&parts);
         // Can't factor out request.respond() because the response's are different types
         use tiny_http::Method::{Get, Post};
         let response_result = match (request.method(), &*parts) {
@@ -254,6 +275,28 @@ fn main() {
                 Ok(resp) => request.respond(resp),
                 Err(resp) => request.respond(resp),
             },
+            (Get, ["song", player_id, room_id_str, _straight_up_random_number_lol]) => {
+                println!("Sending song!");
+                let room_id = room_id_str.parse::<u32>().unwrap();
+                let music_path = state
+                    .rooms
+                    .lock()
+                    .iter()
+                    .find(|r| r.id == room_id)
+                    .unwrap()
+                    .current_song
+                    .as_ref()
+                    .unwrap()
+                    .path
+                    .clone();
+                request.respond(
+                    tiny_http::Response::from_file(std::fs::File::open(music_path).unwrap())
+                        .with_header(
+                            tiny_http::Header::from_bytes("Cache-Control", "no-store")
+                                .expect("can't fail"),
+                        ),
+                )
+            }
             (Get, _) => {
                 if let Ok(file) = std::fs::File::open(http_url_to_local_path(request.url())) {
                     request.respond(tiny_http::Response::from_file(file))

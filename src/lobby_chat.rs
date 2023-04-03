@@ -361,6 +361,10 @@ async fn single_round(state: &crate::State, req_data: InitialRequest) {
             "round_time": round_time
         } );
         ws_send_to_all(&state, room_id, &msg).await;
+
+        if timer == round_time {
+            room(&state, room_id).round_start_time = Some(std::time::Instant::now());
+        }
     }
 
     {
@@ -456,12 +460,43 @@ async fn ingame_ws(
                         .title
                         .to_lowercase()
                 {
+                    let guess_time = (std::time::Instant::now()
+                        - room(&state, room_id).round_start_time.unwrap())
+                    .as_secs_f32();
+                    let how_many_others_have_already_guessed = room(&state, room_id)
+                        .players
+                        .iter()
+                        .filter(|p| p.guessed.is_some())
+                        .count();
+                    let hints_left =
+                        ((room(&state, room_id).round_time_secs as f32 - guess_time) / 10.0) as u32;
+
+                    // This is the original GuessTheSong algorithm as posted by "Frank (11studios)"
+                    // in the GuessTheSong.io Discord server
+                    // https://discord.com/channels/741670496822886470/741670497304969232/1092483679261053078
+                    let mut points = 100;
+                    match guess_time {
+                        x if x < 10.0 => points += 125,
+                        x if x < 20.0 => points += 100,
+                        x if x < 25.0 => points += 75,
+                        x if x < 45.0 => points += 62,
+                        x if x < 70.0 => points += 50,
+                        _ => points += 25,
+                    }
+                    match how_many_others_have_already_guessed {
+                        0 => points += 200,
+                        1 => points += 150,
+                        2 => points += 100,
+                        _ => {}
+                    }
+                    points += u32::min(hints_left * 25, 100);
+
                     room(&state, room_id)
                         .players
                         .iter_mut()
                         .find(|p| p.id == user_id)
                         .unwrap()
-                        .guessed = Some(500); // STUB: calculate point number correctly
+                        .guessed = Some(points);
                 } else {
                     let msg = serde_json::json!( {
                         "type": "message",

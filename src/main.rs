@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 mod browse_rooms;
 mod lobby_chat;
 
@@ -54,6 +53,7 @@ struct Room {
     created_at: std::time::Instant,
     state: RoomState,
     current_song: Option<Song>,
+    round_start_time: Option<std::time::Instant>,
     current_round: u32,
     // No owner ID here: the first player is automatically owner
 }
@@ -74,7 +74,7 @@ fn extract_cookie(cookie_header: &str, key: &str) -> Result<String, String> {
     cookie_header
         .split(";")
         .filter_map(|s| s.trim().split_once("="))
-        .find(|&(k, v)| k == key)
+        .find(|&(k, _)| k == key)
         .map(|(_, v)| percent_decode(v))
         .ok_or_else(|| format!("no {} cookie found", key))
 }
@@ -151,6 +151,7 @@ fn create_room(
             state: RoomState::Lobby,
             current_song: None,
             current_round: 0,
+            round_start_time: None,
         });
     }
 
@@ -244,6 +245,7 @@ fn main() {
             state: RoomState::Lobby,
             current_song: None,
             current_round: 0,
+            round_start_time: None,
         }]),
     });
 
@@ -315,7 +317,7 @@ fn main() {
                 Ok(resp) => request.respond(resp),
                 Err(resp) => request.respond(resp),
             },
-            (Get, ["song", player_id, room_id_str, _straight_up_random_number_lol]) => {
+            (Get, ["song", _player_id, room_id_str, _straight_up_random_number_lol]) => {
                 println!("Sending song!");
                 let room_id = room_id_str.parse::<u32>().unwrap();
                 let music_path = state

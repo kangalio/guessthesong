@@ -9,12 +9,26 @@ type WebsocketWrite = futures::stream::SplitSink<
 type WebsocketRead =
     futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>>;
 
+const EMOJIS: &[&str] = &[
+    "😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣", "😇", "🙂", "🙃", "😉", "😌", "😍", "😘", "😗",
+    "😙", "😚", "😋", "😛", "😝", "😜", "🤪", "🤨", "🧐", "🤓", "😎", "🤩", "😏", "😒", "😞", "😔",
+    "😟", "😕", "🙁", "☹️", "😣", "😖", "😫", "😩", "😢", "😭", "😤", "😠", "😡", "🤬", "🤯", "😳",
+    "😱", "😨", "😰", "😥", "😓", "🤥", "😶", "😐", "😑", "😬", "🙄", "😯", "😦", "😧", "😮", "😲",
+    "😴", "🤤", "😪", "😵", "🤐", "🤢", "🤮", "🤧", "😷", "🤒", "🤕", "🤑", "🤠", "😈", "👿", "👹",
+    "👺", "🤡", "💩", "💀", "☠️", "👽", "👾", "🤖", "🎃", "😺", "😸", "😹", "😻", "😼", "😽", "🙀",
+    "😿", "😾", "👶", "🧒", "👦", "👧", "🧑", "👩", "🧓", "👴", "👵", "🐶", "🐱", "🐭", "🐹", "🐰",
+    "🦊", "🐻", "🐼", "🐨", "🐯", "🦁", "🐮", "🐷", "🐽", "🐸", "🐵", "🙈", "🙉", "🙊",
+];
+
 struct Player {
     name: String,
     id: String,
     loaded: bool,
-    guessed: bool,
+    // Points gained
+    guessed: Option<u32>,
+    streak: u32,
     points: u32,
+    emoji: String,
     websocket: Option<std::sync::Arc<tokio::sync::Mutex<WebsocketWrite>>>,
 }
 
@@ -34,12 +48,13 @@ struct Room {
     id: u32,
     players: Vec<Player>,
     password: Option<String>, // If None, room is public
-    explicit_songs: bool,
+    // explicit_songs: bool,
     num_rounds: u32,
     round_time_secs: u32,
     created_at: std::time::Instant,
     state: RoomState,
     current_song: Option<Song>,
+    current_round: u32,
     // No owner ID here: the first player is automatically owner
 }
 
@@ -47,11 +62,21 @@ pub struct State {
     rooms: parking_lot::Mutex<Vec<Room>>,
 }
 
-fn extract_user_id_cookie(cookie_header: &str) -> Result<&str, &'static str> {
+fn percent_decode(raw: &str) -> String {
+    percent_encoding::percent_decode_str(raw)
+        .decode_utf8_lossy()
+        .into_owned()
+}
+
+// Can't factor out Cookie header extraction into here because we have both http::Request and
+// tiny_http::Request
+fn extract_cookie(cookie_header: &str, key: &str) -> Result<String, String> {
     cookie_header
         .split(";")
-        .find_map(|s| s.trim().strip_prefix("user="))
-        .ok_or_else(|| "missing user cookie")
+        .filter_map(|s| s.trim().split_once("="))
+        .find(|&(k, v)| k == key)
+        .map(|(_, v)| percent_decode(v))
+        .ok_or_else(|| format!("no {} cookie found", key))
 }
 
 fn nanos_since_startup() -> u128 {
@@ -70,7 +95,7 @@ fn gen_id() -> String {
 fn http_url_to_local_path(url: &str) -> std::path::PathBuf {
     let root = std::path::Path::new("/home/kangalioo/dev/rust/guessthesong/frontend/");
 
-    let url = urlencoding::decode(url).unwrap_or_else(|_| url.into());
+    let url = percent_decode(url);
     let mut path = root.join(url.trim_start_matches('/'));
     if path.extension().is_none() {
         path = path.with_extension("html");
@@ -79,33 +104,23 @@ fn http_url_to_local_path(url: &str) -> std::path::PathBuf {
     path
 }
 
-fn parse_formdata(body: &str) -> HashMap<&str, &str> {
-    let mut params = HashMap::new();
-
-    for kv_pair in body.split('&') {
-        let Some((key, value)) = kv_pair.split_once('=') else {
-            log::error!("invalid kv pair: {}", kv_pair);
-            continue;
-        };
-
-        params.insert(key, value);
-    }
-
-    params
-}
-
-fn create_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty> {
-    let params = parse_formdata(body);
-    let username = params.get("username").copied().unwrap_or("");
+fn create_room(
+    state: &State,
+    cookie_header: &str,
+    body: &str,
+) -> Result<tiny_http::Response<std::io::Empty>, tiny_http::Response<std::io::Empty>> {
+    let params =
+        form_urlencoded::parse(body.as_bytes()).collect::<std::collections::HashMap<_, _>>();
+    let username = params.get("username").unwrap();
     let user_id = gen_id();
     let id;
     {
         let mut rooms = state.rooms.lock();
         id = rooms.iter().map(|r| r.id).max().unwrap_or(0) + 1; // generate a new unambiguous ID
         rooms.push(Room {
-            name: params.get("room_name").copied().unwrap_or("").to_string(),
+            name: params.get("room_name").unwrap().to_string(),
             id,
-            password: match params.get("password").copied() {
+            password: match params.get("password").map(|x| &**x) {
                 None | Some("") => None,
                 Some(x) => Some(x.to_string()),
             },
@@ -113,11 +128,17 @@ fn create_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty>
                 name: username.to_string(),
                 id: user_id.clone(),
                 loaded: false,
-                guessed: false,
+                guessed: None,
                 points: 0,
+                streak: 0,
+                emoji: EMOJIS[extract_cookie(cookie_header, "emoji")
+                    .unwrap()
+                    .parse::<usize>()
+                    .unwrap()]
+                .to_string(),
                 websocket: None,
             }],
-            explicit_songs: params.get("explicit").copied() == Some("y"),
+            // explicit_songs: params.get("explicit").copied() == Some("y"),
             num_rounds: params
                 .get("rounds")
                 .and_then(|x| x.parse().ok())
@@ -129,11 +150,12 @@ fn create_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty>
             created_at: std::time::Instant::now(),
             state: RoomState::Lobby,
             current_song: None,
+            current_round: 0,
         });
     }
 
     // TODO: don't hardcode the URL somehow
-    tiny_http::Response::empty(302)
+    Ok(tiny_http::Response::empty(302)
         .with_header(
             tiny_http::Header::from_bytes("Location", format!("http://127.0.0.1:5234/room/{}", id))
                 .expect("cant happen"),
@@ -141,7 +163,7 @@ fn create_room(state: &State, body: &str) -> tiny_http::Response<std::io::Empty>
         .with_header(
             tiny_http::Header::from_bytes("Set-Cookie", format!("user={}; Path=/", user_id))
                 .expect("cant happen"),
-        )
+        ))
 }
 
 fn redirect(target_url: &str) -> tiny_http::Response<std::io::Empty> {
@@ -151,16 +173,18 @@ fn redirect(target_url: &str) -> tiny_http::Response<std::io::Empty> {
 
 fn join_room(
     state: &State,
+    cookie_header: &str,
     body: &str,
 ) -> Result<tiny_http::Response<std::io::Empty>, tiny_http::Response<std::io::Empty>> {
-    let params = parse_formdata(body);
+    let params =
+        form_urlencoded::parse(body.as_bytes()).collect::<std::collections::HashMap<_, _>>();
     let username = params
         .get("username")
         .ok_or_else(|| tiny_http::Response::empty(400))?;
     let user_id = gen_id();
     let room_id = params
         .get("room_code")
-        .copied()
+        .as_deref()
         .ok_or_else(|| tiny_http::Response::empty(400))?
         .parse::<u32>()
         .map_err(|_| tiny_http::Response::empty(400))?;
@@ -175,8 +199,14 @@ fn join_room(
             name: username.to_string(),
             id: user_id.clone(),
             loaded: false,
-            guessed: false,
+            guessed: None,
             points: 0,
+            streak: 0,
+            emoji: EMOJIS[extract_cookie(cookie_header, "emoji")
+                .unwrap()
+                .parse::<usize>()
+                .unwrap()]
+            .to_string(),
             websocket: None,
         })
     }
@@ -207,12 +237,13 @@ fn main() {
             name: "starter room lol".to_string(),
             players: vec![],
             password: None,
-            explicit_songs: true,
+            // explicit_songs: true,
             num_rounds: 9,
             round_time_secs: 75,
             created_at: std::time::Instant::now(),
             state: RoomState::Lobby,
             current_song: None,
+            current_round: 0,
         }]),
     });
 
@@ -241,18 +272,27 @@ fn main() {
             log::error!("failed to read request body: {}", e);
         }
 
+        let cookie_header = request
+            .headers()
+            .iter()
+            .find(|header| header.field.equiv("Cookie"))
+            .map_or("", |header| header.value.as_str());
+
         let parts = request
             .url()
-            .trim_start_matches('/')
             .split('/')
+            .filter(|part| !part.is_empty()) // Remove leading / from or intertwined //'s
             .collect::<Vec<_>>();
-        dbg!(&parts);
         // Can't factor out request.respond() because the response's are different types
         use tiny_http::Method::{Get, Post};
         let response_result = match (request.method(), &*parts) {
-            (Post, ["create-room"]) => request.respond(create_room(&state, &body)),
+            (Get, []) => request.respond(redirect("http://127.0.0.1:5234/index.html")),
+            (Post, ["create-room"]) => match create_room(&state, cookie_header, &body) {
+                Ok(resp) => request.respond(resp),
+                Err(resp) => request.respond(resp),
+            },
             (Get, ["room", room_id_str]) => {
-                match lobby_chat::get_room(&state, &request, room_id_str) {
+                match lobby_chat::get_room(&state, cookie_header, room_id_str) {
                     Ok(resp) => request.respond(resp),
                     Err(resp) => request.respond(resp),
                 }
@@ -271,7 +311,7 @@ fn main() {
                     tiny_http::Response::from_string(format!("{}", e)).with_status_code(404),
                 ),
             },
-            (Post, ["join", ..]) => match join_room(&state, &body) {
+            (Post, ["join", ..]) => match join_room(&state, cookie_header, &body) {
                 Ok(resp) => request.respond(resp),
                 Err(resp) => request.respond(resp),
             },

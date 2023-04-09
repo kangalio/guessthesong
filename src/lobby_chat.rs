@@ -199,16 +199,35 @@ fn player<'a>(
 
 /// Returns title and path
 fn select_random_song() -> crate::Song {
-    let songs = std::fs::read_dir("/home/kangalioo/audio/maikel6311/nightcore/mp3/")
-        .unwrap()
-        .collect::<Vec<_>>();
+    let songs = serde_json::from_str::<Vec<crate::Song>>(
+        &std::fs::read_to_string("Das Gelbe vom Ei 2019.json").unwrap(),
+    )
+    .unwrap();
     let random_index = crate::nanos_since_startup() % songs.len() as u128;
-    let path = songs[random_index as usize].as_ref().unwrap().path();
+    let mut song = songs[random_index as usize].clone();
 
-    let title = path.file_name().unwrap().to_string_lossy();
-    let title = title[..title.rfind('.').unwrap_or(title.len())].to_string();
+    println!("Starting song download...");
+    let audio = std::sync::Arc::new(
+        std::process::Command::new("yt-dlp")
+            .args([
+                "-x",
+                "-o",
+                "-",
+                "--playlist-end",
+                "1",
+                &format!(
+                    "https://music.youtube.com/search?q={} - {}",
+                    song.artist, song.title
+                ),
+            ])
+            .output()
+            .unwrap()
+            .stdout,
+    );
+    println!("Finished song download!");
+    song.audio = Some(audio.clone());
 
-    crate::Song { path, title }
+    song
 }
 
 async fn lobby_ws(
@@ -313,12 +332,8 @@ async fn single_round(state: &crate::State, req_data: InitialRequest) {
         username: _,
     } = req_data;
 
-    let song_title = room(state, room_id)
-        .current_song
-        .as_ref()
-        .unwrap()
-        .title
-        .clone();
+    let song = room(state, room_id).current_song.clone().unwrap();
+    let song_title = &song.title;
     let round_time = room(state, room_id).round_time_secs;
 
     let hints_at = (10..u32::min(round_time, 70)).step_by(10).rev();

@@ -37,9 +37,13 @@ enum RoomState {
     Play,
 }
 
+#[derive(Clone, serde::Deserialize)]
 struct Song {
-    path: std::path::PathBuf,
+    // path: std::path::PathBuf,
+    artist: String,
     title: String,
+    #[serde(skip)]
+    audio: Option<std::sync::Arc<Vec<u8>>>,
 }
 
 struct Room {
@@ -320,24 +324,26 @@ fn main() {
             (Get, ["song", _player_id, room_id_str, _straight_up_random_number_lol]) => {
                 println!("Sending song!");
                 let room_id = room_id_str.parse::<u32>().unwrap();
-                let music_path = state
-                    .rooms
-                    .lock()
-                    .iter()
-                    .find(|r| r.id == room_id)
-                    .unwrap()
-                    .current_song
-                    .as_ref()
-                    .unwrap()
-                    .path
-                    .clone();
-                request.respond(
-                    tiny_http::Response::from_file(std::fs::File::open(music_path).unwrap())
-                        .with_header(
-                            tiny_http::Header::from_bytes("Cache-Control", "no-store")
-                                .expect("can't fail"),
-                        ),
-                )
+                let audio = loop {
+                    if let Some(audio) = state
+                        .rooms
+                        .lock()
+                        .iter()
+                        .find(|r| r.id == room_id)
+                        .unwrap()
+                        .current_song
+                        .as_ref()
+                        .unwrap()
+                        .audio
+                        .clone()
+                    {
+                        break audio;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                };
+                request.respond(tiny_http::Response::from_data(&**audio).with_header(
+                    tiny_http::Header::from_bytes("Cache-Control", "no-store").expect("can't fail"),
+                ))
             }
             (Get, _) => {
                 if let Ok(file) = std::fs::File::open(http_url_to_local_path(request.url())) {

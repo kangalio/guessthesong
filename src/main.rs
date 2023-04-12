@@ -8,6 +8,8 @@ type WebsocketWrite = futures::stream::SplitSink<
 type WebsocketRead =
     futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>>;
 
+const IP_AND_PORT: &str = "127.0.0.1:5234";
+const PLAYLIST: &str = "Das Gelbe vom Ei 2023.json";
 const EMOJIS: &[&str] = &[
     "😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣", "😇", "🙂", "🙃", "😉", "😌", "😍", "😘", "😗",
     "😙", "😚", "😋", "😛", "😝", "😜", "🤪", "🤨", "🧐", "🤓", "😎", "🤩", "😏", "😒", "😞", "😔",
@@ -162,8 +164,11 @@ fn create_room(
     // TODO: don't hardcode the URL somehow
     Ok(tiny_http::Response::empty(302)
         .with_header(
-            tiny_http::Header::from_bytes("Location", format!("http://127.0.0.1:5234/room/{}", id))
-                .expect("cant happen"),
+            tiny_http::Header::from_bytes(
+                "Location",
+                format!("http://{}/room/{}", crate::IP_AND_PORT, id),
+            )
+            .expect("cant happen"),
         )
         .with_header(
             tiny_http::Header::from_bytes("Set-Cookie", format!("user={}; Path=/", user_id))
@@ -199,7 +204,7 @@ fn join_room(
         let room = rooms
             .iter_mut()
             .find(|r| r.id == room_id)
-            .ok_or_else(|| redirect("http://127.0.0.1:5234/server-browser"))?;
+            .ok_or_else(|| redirect(&format!("http://{}/server-browser", crate::IP_AND_PORT)))?;
         room.players.push(Player {
             name: username.to_string(),
             id: user_id.clone(),
@@ -221,7 +226,7 @@ fn join_room(
         .with_header(
             tiny_http::Header::from_bytes(
                 "Location",
-                format!("http://127.0.0.1:5234/room/{}", room_id),
+                format!("http://{}/room/{}", IP_AND_PORT, room_id),
             )
             .expect("cant happen"),
         )
@@ -292,7 +297,7 @@ fn main() {
         // Can't factor out request.respond() because the response's are different types
         use tiny_http::Method::{Get, Post};
         let response_result = match (request.method(), &*parts) {
-            (Get, []) => request.respond(redirect("http://127.0.0.1:5234/index.html")),
+            (Get, []) => request.respond(redirect(&format!("http://{}/index.html", IP_AND_PORT))),
             (Post, ["create-room"]) => match create_room(&state, cookie_header, &body) {
                 Ok(resp) => request.respond(resp),
                 Err(resp) => request.respond(resp),

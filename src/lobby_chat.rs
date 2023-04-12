@@ -20,12 +20,12 @@ pub fn get_room(
         let room = rooms
             .iter()
             .find(|r| r.id == room_id)
-            .ok_or_else(|| redirect("http://127.0.0.1:5234/server-browser"))?;
+            .ok_or_else(|| redirect(&format!("http://{}/server-browser", crate::IP_AND_PORT)))?;
 
         room.players
             .iter()
             .find(|p| p.id == user_id)
-            .ok_or_else(|| redirect(&format!("http://127.0.0.1:5234/join/{}", room_id)))?;
+            .ok_or_else(|| redirect(&format!("http://{}/join/{}", crate::IP_AND_PORT, room_id)))?;
 
         room_state = room.state.clone();
     };
@@ -198,9 +198,9 @@ fn player<'a>(
 }
 
 /// Returns title and path
-fn select_random_song() -> crate::Song {
+async fn download_random_song() -> crate::Song {
     let songs = serde_json::from_str::<Vec<crate::Song>>(
-        &std::fs::read_to_string("Das Gelbe vom Ei 2019.json").unwrap(),
+        &std::fs::read_to_string(crate::PLAYLIST).unwrap(),
     )
     .unwrap();
     let random_index = crate::nanos_since_startup() % songs.len() as u128;
@@ -208,7 +208,7 @@ fn select_random_song() -> crate::Song {
 
     println!("Starting song download...");
     let audio = std::sync::Arc::new(
-        std::process::Command::new("yt-dlp")
+        tokio::process::Command::new("yt-dlp")
             .args([
                 "-x",
                 "-o",
@@ -221,6 +221,7 @@ fn select_random_song() -> crate::Song {
                 ),
             ])
             .output()
+            .await
             .unwrap()
             .stdout,
     );
@@ -277,7 +278,7 @@ async fn lobby_ws(
                 ws_send_to_all(state, room_id, &msg).await;
             }
             Message::StartGame => {
-                room(state, room_id).current_song = Some(select_random_song());
+                room(state, room_id).current_song = Some(download_random_song().await);
 
                 let msg = serde_json::json!( { "state": "start_game" } );
                 ws_send_to_all(state, room_id, &msg).await;
@@ -331,6 +332,9 @@ async fn single_round(state: &crate::State, req_data: InitialRequest) {
         user_id: _,
         username: _,
     } = req_data;
+
+    // Already begin downloading the next song
+    let next_song = tokio::spawn(download_random_song());
 
     let song = room(state, room_id).current_song.clone().unwrap();
     let song_title = &song.title;
@@ -416,9 +420,10 @@ async fn single_round(state: &crate::State, req_data: InitialRequest) {
     } );
     ws_send_to_all(&state, room_id, &msg).await;
 
+    let new_song = next_song.await.unwrap();
     {
         let mut room = room(state, room_id);
-        room.current_song = Some(select_random_song());
+        room.current_song = Some(new_song);
         for p in &mut room.players {
             p.guessed = None;
             p.loaded = false;

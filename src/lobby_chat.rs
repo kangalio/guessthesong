@@ -153,24 +153,20 @@ fn player_state_msg(state: &crate::State, room_id: u32, joined: Option<&str>) ->
         .find(|r| r.id == room_id)
         .expect("room was deleted inbetween websocket connection accept and first message");
     serde_json::json!( {
-        "state": if joined.is_some() { "join" } else { "player_data" },
-        "message": joined,
-        "payload": {
-            "state": "player_data",
-            "payload": room.players.iter().map(|p| serde_json::json!( {
-                "uuid": p.id,
-                "username": p.name,
-                "points": p.points + p.guessed.unwrap_or(0),
-                "streak": p.streak,
-                "emoji": p.emoji,
-                "prev_points": p.points,
-                "loaded": p.loaded,
-                "guessed": p.guessed.is_some(),
-                "disconnected": false,
-                "game_state": "Lobby"
-            } )).collect::<Vec<_>>(),
-            "owner": room.players.first().map_or("", |p| &p.id).to_string(),
-        }
+        "state": "player_data",
+        "payload": room.players.iter().map(|p| serde_json::json!( {
+            "uuid": p.id,
+            "username": p.name,
+            "points": p.points + p.guessed.unwrap_or(0),
+            "streak": p.streak,
+            "emoji": p.emoji,
+            "prev_points": p.points,
+            "loaded": p.loaded,
+            "guessed": p.guessed.is_some(),
+            "disconnected": false,
+            "game_state": "Lobby"
+        } )).collect::<Vec<_>>(),
+        "owner": room.players.first().map_or("", |p| &p.id).to_string(),
     } )
 }
 
@@ -199,7 +195,7 @@ fn player<'a>(
 
 /// Returns title and path
 async fn download_random_song() -> crate::Song {
-    let songs = serde_json::from_str::<Vec<crate::Song>>(
+    /* let songs = serde_json::from_str::<Vec<crate::Song>>(
         &std::fs::read_to_string(crate::PLAYLIST).unwrap(),
     )
     .unwrap();
@@ -228,7 +224,22 @@ async fn download_random_song() -> crate::Song {
     println!("Finished song download!");
     song.audio = Some(audio.clone());
 
-    song
+    song */
+
+    let songs = std::fs::read_dir("/home/kangalioo/audio/maikel6311/nightcore/mp3/")
+        .unwrap()
+        .collect::<Vec<_>>();
+    let random_index = crate::nanos_since_startup() % songs.len() as u128;
+    let path = songs[random_index as usize].as_ref().unwrap().path();
+
+    let title = path.file_name().unwrap().to_string_lossy();
+    let title = title[..title.rfind('.').unwrap_or(title.len())].to_string();
+
+    crate::Song {
+        artist: "Unknown".into(),
+        title,
+        audio: Some(std::sync::Arc::new(std::fs::read(path).unwrap())),
+    }
 }
 
 async fn lobby_ws(
@@ -254,7 +265,11 @@ async fn lobby_ws(
     ws_send_to_all(
         state,
         room_id,
-        &player_state_msg(state, room_id, Some(&username)),
+        &serde_json::json!( {
+            "state": "join",
+            "message": username,
+            "payload": player_state_msg(state, room_id, Some(&username)),
+        } ),
     )
     .await;
 

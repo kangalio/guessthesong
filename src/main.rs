@@ -9,7 +9,7 @@ type WebsocketRead =
     futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>>;
 
 const IP_AND_PORT: &str = "127.0.0.1:5234";
-const PLAYLIST: &str = "Das Gelbe vom Ei 2023.json";
+const PLAYLIST: &str = "stuff/Das Gelbe vom Ei 2023.json";
 const EMOJIS: &[&str] = &[
     "😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣", "😇", "🙂", "🙃", "😉", "😌", "😍", "😘", "😗",
     "😙", "😚", "😋", "😛", "😝", "😜", "🤪", "🤨", "🧐", "🤓", "😎", "🤩", "😏", "😒", "😞", "😔",

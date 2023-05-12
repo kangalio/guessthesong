@@ -1276,7 +1276,7 @@ fadeInPage();
         const room = `ROOMID`;
         const roomCode = `bce2b02f064843bb84050f9e13890893`;
 
-        const socket = new WebSocket('ws://' + document.domain + ":9002/" + room);
+        const socket = new WebSocket(`ws://${document.domain}:${location.port}/room/${room}/ws`);
 
         const slider = document.getElementById("myRange");
         const backgroundImage = "/static/images/emoji_body.svg";

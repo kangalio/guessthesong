@@ -118,10 +118,12 @@ pub async fn get_room(
             .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
             .replace("ROOMID", &room_id.to_string())
             .replace("PLAYERID", &player_id.0.to_string()),
-        RoomState::Play { .. } => std::fs::read_to_string("frontend/roomPLAY.html")
-            .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
-            .replace("ROOMID", &room_id.to_string())
-            .replace("PLAYERID", &player_id.0.to_string()),
+        RoomState::WaitingForLoaded | RoomState::WaitingForReconnect | RoomState::Playing => {
+            std::fs::read_to_string("frontend/roomPLAY.html")
+                .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
+                .replace("ROOMID", &room_id.to_string())
+                .replace("PLAYERID", &player_id.0.to_string())
+        }
     };
     Ok(axum::response::Html(html))
 }
@@ -138,6 +140,22 @@ pub async fn get_room_ws(
     ws.on_upgrade(move |ws| async move {
         websocket_connect(room, player_id, std::sync::Arc::new(WebSocket::new(ws))).await;
     })
+}
+
+pub async fn get_song(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::State>>,
+    axum::extract::Path((_player_id, room_id, _random)): axum::extract::Path<(u32, u32, u32)>,
+    axum::extract::TypedHeader(cookies): axum::extract::TypedHeader<axum::headers::Cookie>,
+) -> impl axum::response::IntoResponse {
+    let player_id = PlayerId(cookies.get("user").unwrap().parse().unwrap());
+    let room = state.rooms.lock().get(&room_id).unwrap().clone();
+
+    let room = room.lock();
+
+    if !room.players.iter().any(|p| p.id == player_id) {
+        return Err(axum::http::StatusCode::UNAUTHORIZED);
+    }
+    Ok(room.current_song.as_ref().unwrap().audio.clone())
 }
 
 pub async fn fallback(uri: axum::http::Uri) -> impl axum::response::IntoResponse {

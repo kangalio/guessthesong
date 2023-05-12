@@ -11,7 +11,8 @@ impl serde::Serialize for PlayerId {
 #[serde(rename_all = "kebab-case")]
 pub enum ReceiveEvent {
     IncomingMsg { msg: String },
-    AudioLoad,
+    StartGame,
+    AudioLoaded,
     TypingStatus { typing: bool },
 }
 
@@ -64,9 +65,10 @@ pub enum SendEvent {
     PlayerData { payload: Vec<SinglePlayerData>, owner: PlayerId },
     Chat { r#type: String, username: String, uuid: PlayerId, msg: String },
     Loading,
-    Timer { message: u32, hint: Vec<char>, scores: Vec<SinglePlayerData>, round_time: u32 },
+    Timer { message: u32, hint: String, scores: Vec<SinglePlayerData>, round_time: u32 },
     PlayerTyping { uuid: PlayerId, typing: bool },
     Notify { message: String },
     NewTurn,
-    Scoreboard { payload: Vec<ScoreboardPlayer> },
+    Scoreboard { payload: Vec<ScoreboardPlayer>, round: u32, max_rounds: u32 },
+    StartGame,
 }

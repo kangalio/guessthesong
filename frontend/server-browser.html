@@ -259,7 +259,7 @@ fadeInPage();
     <script type="text/javascript" charset="utf-8">
         let responsive_state_array = [];
 
-        socket = new WebSocket(`ws` + '://' + document.domain + ':' + location.port + '/server-browser');
+        socket = new WebSocket(`ws://${document.domain}:${location.port}/server-browser`);
         
         dataFromServer = JSON.parse('[]');
 

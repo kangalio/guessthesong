@@ -1,11 +1,13 @@
 mod json;
 mod room;
 mod routes;
+mod song_provider;
 mod utils;
 
 pub use json::*;
 pub use room::*;
 pub use routes::*;
+pub use song_provider::*;
 pub use utils::*;
 
 const PLAYLIST: &str = "stuff/Das Gelbe vom Ei 2023.json";
@@ -19,6 +21,12 @@ const EMOJIS: &[&str] = &[
     "😿", "😾", "👶", "🧒", "👦", "👧", "🧑", "👩", "🧓", "👴", "👵", "🐶", "🐱", "🐭", "🐹", "🐰",
     "🦊", "🐻", "🐼", "🐨", "🐯", "🦁", "🐮", "🐷", "🐽", "🐸", "🐵", "🙈", "🙉", "🙊",
 ];
+
+#[derive(Clone)]
+pub struct Song {
+    title: String,
+    audio: Vec<u8>,
+}
 
 pub struct State {
     rooms: parking_lot::Mutex<
@@ -52,7 +60,12 @@ async fn main() {
                 round_time_secs: 75,
                 created_at: std::time::Instant::now(),
                 state: RoomState::Lobby,
+                round_task: None,
+                song_provider: std::sync::Arc::new(SongProvider::new()),
                 theme: "Random Songs".into(),
+                current_song: None,
+                round_start_time: None,
+                current_round: 0,
             })),
         )])),
     });
@@ -63,6 +76,7 @@ async fn main() {
         .route("/join/:room_id", axum::routing::post(routes::post_join))
         .route("/room/:room_id", axum::routing::get(routes::get_room))
         .route("/room/:room_id/ws", axum::routing::get(routes::get_room_ws))
+        .route("/song/:player_id/:room_id/:random", axum::routing::get(routes::get_song))
         .fallback(routes::fallback)
         .with_state(state);
 

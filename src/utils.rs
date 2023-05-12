@@ -1,11 +1,13 @@
 #[derive(Debug)]
 pub struct WebSocket {
-    send: tokio::sync::Mutex<
-        futures::stream::SplitSink<
-            // tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-            // tungstenite::Message,
-            axum::extract::ws::WebSocket,
-            axum::extract::ws::Message,
+    send: std::sync::Arc<
+        tokio::sync::Mutex<
+            futures::stream::SplitSink<
+                // tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+                // tungstenite::Message,
+                axum::extract::ws::WebSocket,
+                axum::extract::ws::Message,
+            >,
         >,
     >,
     recv: tokio::sync::Mutex<
@@ -14,6 +16,9 @@ pub struct WebSocket {
             axum::extract::ws::WebSocket,
         >,
     >,
+    // Need to store this for send-only users, who would otherwise would never see notice the closed
+    // stream
+    is_closed: std::sync::Arc<parking_lot::Mutex<bool>>,
 }
 
 impl WebSocket {
@@ -21,13 +26,21 @@ impl WebSocket {
         use futures::StreamExt as _;
 
         let (send, recv) = ws.split();
-        Self { send: tokio::sync::Mutex::new(send), recv: tokio::sync::Mutex::new(recv) }
+        Self {
+            send: std::sync::Arc::new(tokio::sync::Mutex::new(send)),
+            recv: tokio::sync::Mutex::new(recv),
+            is_closed: std::sync::Arc::new(parking_lot::Mutex::new(false)),
+        }
     }
 
     /// Returns None when stream is closed
-    pub async fn send(&self, msg: &impl serde::Serialize) -> Option<()> {
+    pub fn send(&self, msg: &impl serde::Serialize) -> Option<()> {
         use axum::extract::ws::Message;
         use futures::SinkExt as _;
+
+        if *self.is_closed.lock() {
+            return None;
+        }
 
         let msg = match serde_json::to_string(msg) {
             Ok(x) => Message::Text(x),
@@ -36,7 +49,16 @@ impl WebSocket {
                 return Some(());
             }
         };
-        self.send.lock().await.send(msg).await.ok()
+
+        let send = self.send.clone();
+        let is_closed = self.is_closed.clone();
+        tokio::spawn(async move {
+            if let Err(_) = send.lock().await.send(msg).await {
+                *is_closed.lock() = true;
+            }
+        });
+
+        Some(())
     }
 
     /// Returns None when stream is closed
@@ -50,9 +72,9 @@ impl WebSocket {
                     Ok(x) => return Some(x),
                     Err(e) => log::warn!("failed to deserialize websocket message: {}", e),
                 },
-                Some(Ok(other)) => log::warn!("ignoring unexpected websocket message: {:?}", other),
                 // Mmh yes let's have 134513 states for the same thing
                 None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return None,
+                Some(Ok(other)) => log::warn!("ignoring unexpected websocket message: {:?}", other),
             }
         }
     }

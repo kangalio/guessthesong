@@ -8,27 +8,30 @@ pub async fn get_server_browser(
         let ws = WebSocket::new(ws);
 
         loop {
-            let msg = SendEvent::FetchNew {
+            ws.send(&SendEvent::FetchNew {
                 msg: state
                     .rooms
                     .lock()
                     .iter()
-                    .map(|room| ListedRoom {
-                        code: room.meta.id,
-                        idle: (std::time::Instant::now() - room.meta.created_at).as_secs(),
-                        name: room.meta.name.clone(),
-                        players: room.meta.player_ids.len(),
-                        status: if room.meta.password.is_some() {
-                            ListedRoomState::Private
-                        } else {
-                            ListedRoomState::Public
-                        },
-                        theme: room.meta.theme.clone(),
-                        game_mode: "Themes".into(), // is this ever something else?
+                    .map(|(&id, room)| {
+                        let room = room.lock();
+
+                        ListedRoom {
+                            code: id,
+                            idle: (std::time::Instant::now() - room.created_at).as_secs(),
+                            name: room.name.clone(),
+                            players: room.players.len(),
+                            status: if room.password.is_some() {
+                                ListedRoomState::Private
+                            } else {
+                                ListedRoomState::Public
+                            },
+                            theme: room.theme.clone(),
+                            game_mode: "Themes".into(), // is this ever something else?
+                        }
                     })
                     .collect(),
-            };
-            ws.send(&msg).await;
+            });
 
             std::thread::sleep(std::time::Duration::from_secs(5));
         }
@@ -56,29 +59,32 @@ pub async fn post_join(
 ) -> Result<impl axum::response::IntoResponse, axum::response::ErrorResponse> {
     let PostJoinForm { username, room_code } = form;
     let player_id = crate::gen_id();
+    let room = state
+        .rooms
+        .lock()
+        .get(&room_code)
+        .ok_or_else(|| axum::response::Redirect::to("/server-browser"))?
+        .clone();
 
-    {
-        let mut rooms = state.rooms.lock();
-        let room = rooms
-            .iter_mut()
-            .find(|room| room.meta.id == form.room_code)
-            .ok_or_else(|| axum::response::Redirect::to("/server-browser"))?;
+    let mut room = room.lock();
+    room.players.push(Player {
+        name: username.to_string(),
+        id: player_id,
+        loaded: false,
+        guessed: None,
+        disconnected: false,
+        points: 0,
+        streak: 0,
+        emoji: crate::EMOJIS[cookies.get("emoji").unwrap().parse::<usize>().unwrap()].to_string(),
+        ws: None,
+    });
+    let player = room.players.last().unwrap();
 
-        let join_event =
-            crate::room_runner::RoomRunnerMessage::PlayerJoin(crate::room_runner::Player {
-                name: username.to_string(),
-                id: player_id,
-                loaded: false,
-                guessed: None,
-                disconnected: false,
-                points: 0,
-                streak: 0,
-                emoji: crate::EMOJIS[cookies.get("emoji").unwrap().parse::<usize>().unwrap()]
-                    .to_string(),
-                ws: None,
-            });
-        room.runner_tx.send(join_event).unwrap();
-    }
+    // Notify existing players about this newly joined user
+    room.send_all(&SendEvent::Join {
+        message: player.name.clone(),
+        payload: Box::new(room.player_state_msg()),
+    });
 
     Ok((
         axum::response::AppendHeaders([(
@@ -94,32 +100,28 @@ pub async fn get_room(
     axum::extract::TypedHeader(cookies): axum::extract::TypedHeader<axum::headers::Cookie>,
     axum::extract::Path(room_id): axum::extract::Path<u32>,
 ) -> Result<impl axum::response::IntoResponse, axum::response::ErrorResponse> {
-    let user_id = cookies.get("user").unwrap().to_string();
+    let player_id = PlayerId(cookies.get("user").unwrap().parse().unwrap());
+    let room = state
+        .rooms
+        .lock()
+        .get(&room_id)
+        .ok_or_else(|| axum::response::Redirect::to("/server-browser"))?
+        .clone();
 
-    let room_state;
-    {
-        let rooms = state.rooms.lock();
-        let room = rooms
-            .iter()
-            .find(|r| r.meta.id == room_id)
-            .ok_or_else(|| axum::response::Redirect::to("/server-browser"))?;
+    let room = room.lock();
+    if !room.players.iter().any(|p| p.id == player_id) {
+        return Err(axum::response::Redirect::to(&format!("/join/{}", room_id)).into());
+    }
 
-        if !room.meta.player_ids.lock().contains(&user_id) {
-            return Err(axum::response::Redirect::to(&format!("/join/{}", room_id)).into());
-        }
-
-        room_state = room.meta.state.clone();
-    };
-
-    let html = match room_state {
-        crate::RoomState::Lobby => std::fs::read_to_string("frontend/roomLOBBY.html")
+    let html = match room.state {
+        RoomState::Lobby => std::fs::read_to_string("frontend/roomLOBBY.html")
             .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
             .replace("ROOMID", &room_id.to_string())
-            .replace("USERID", &user_id),
-        crate::RoomState::Play { .. } => std::fs::read_to_string("frontend/roomPLAY.html")
+            .replace("PLAYERID", &player_id.0.to_string()),
+        RoomState::Play { .. } => std::fs::read_to_string("frontend/roomPLAY.html")
             .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
             .replace("ROOMID", &room_id.to_string())
-            .replace("PLAYERID", &user_id),
+            .replace("PLAYERID", &player_id.0.to_string()),
     };
     Ok(axum::response::Html(html))
 }
@@ -131,12 +133,10 @@ pub async fn get_room_ws(
     ws: axum::extract::WebSocketUpgrade,
 ) -> impl axum::response::IntoResponse {
     let player_id = PlayerId(cookies.get("user").unwrap().parse().unwrap());
+    let room = state.rooms.lock().get(&room_id).unwrap().clone();
 
     ws.on_upgrade(move |ws| async move {
-        let mut rooms = state.rooms.lock();
-        let Some(room) = rooms.iter_mut().find(|room| room.meta.id == room_id) else { return };
-        let join_event = crate::room_runner::RoomRunnerMessage::WebsocketConnect { ws, player_id };
-        room.runner_tx.send(join_event).unwrap();
+        websocket_connect(room, player_id, std::sync::Arc::new(WebSocket::new(ws))).await;
     })
 }
 

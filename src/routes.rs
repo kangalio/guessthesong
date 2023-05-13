@@ -1,6 +1,6 @@
-use crate::structs::*;
 use crate::room::*;
 use crate::song_provider::*;
+use crate::structs::*;
 use crate::utils::*;
 
 const EMOJIS: &[&str] = &[
@@ -64,7 +64,7 @@ pub async fn get_server_browser(
                     .collect(),
             });
 
-            std::thread::sleep(std::time::Duration::from_secs(5));
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }
     })
 }
@@ -108,7 +108,7 @@ pub async fn post_join(
         emoji: EMOJIS[cookies.get("emoji").unwrap().parse::<usize>().unwrap()].to_string(),
         ws: None,
     });
-    let player = room.players.last().unwrap();
+    let player = room.players.last().expect("impossible, we just pushed");
 
     // Notify existing players about this newly joined user
     room.send_all(&SendEvent::Join {
@@ -125,10 +125,18 @@ pub async fn post_join(
     ))
 }
 
-pub async fn get_room(
-    axum::extract::State(state): axum::extract::State<std::sync::Arc<State>>,
-    axum::extract::TypedHeader(cookies): axum::extract::TypedHeader<axum::headers::Cookie>,
-    axum::extract::Path(room_id): axum::extract::Path<u32>,
+#[derive(serde::Deserialize)]
+pub struct RoomSettings {
+    room_name: String,
+    rounds: u32,
+    round_time: u32,
+}
+
+fn get_or_post_room(
+    state: std::sync::Arc<State>,
+    cookies: axum::headers::Cookie,
+    room_id: u32,
+    apply_settings: Option<RoomSettings>,
 ) -> Result<impl axum::response::IntoResponse, axum::response::ErrorResponse> {
     let player_id = PlayerId(cookies.get("user").unwrap().parse().unwrap());
     let room = state
@@ -138,9 +146,15 @@ pub async fn get_room(
         .ok_or_else(|| axum::response::Redirect::to("/server-browser"))?
         .clone();
 
-    let room = room.lock();
+    let mut room = room.lock();
     if !room.players.iter().any(|p| p.id == player_id) {
         return Err(axum::response::Redirect::to(&format!("/join/{}", room_id)).into());
+    }
+
+    if let Some(RoomSettings { room_name, rounds, round_time }) = apply_settings {
+        room.name = room_name;
+        room.num_rounds = rounds;
+        room.round_time_secs = round_time;
     }
 
     let html = match room.state {
@@ -156,6 +170,23 @@ pub async fn get_room(
         }
     };
     Ok(axum::response::Html(html))
+}
+
+pub async fn get_room(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<State>>,
+    axum::extract::TypedHeader(cookies): axum::extract::TypedHeader<axum::headers::Cookie>,
+    axum::extract::Path(room_id): axum::extract::Path<u32>,
+) -> Result<impl axum::response::IntoResponse, axum::response::ErrorResponse> {
+    get_or_post_room(state, cookies, room_id, None)
+}
+
+pub async fn post_room(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<State>>,
+    axum::extract::TypedHeader(cookies): axum::extract::TypedHeader<axum::headers::Cookie>,
+    axum::extract::Path(room_id): axum::extract::Path<u32>,
+    axum::extract::Form(room_settings): axum::extract::Form<RoomSettings>,
+) -> Result<impl axum::response::IntoResponse, axum::response::ErrorResponse> {
+    get_or_post_room(state, cookies, room_id, Some(room_settings))
 }
 
 pub async fn get_room_ws(
@@ -210,7 +241,9 @@ pub async fn run_axum() {
                 created_at: std::time::Instant::now(),
                 state: RoomState::Lobby,
                 round_task: None,
-                song_provider: std::sync::Arc::new(SongProvider::new()),
+                song_provider: std::sync::Arc::new(
+                    SongProvider::new_spotify("5wWUVh8qv6YygjbNZCckFl").await,
+                ),
                 theme: "Random Songs".into(),
                 current_song: None,
                 round_start_time: None,
@@ -221,9 +254,8 @@ pub async fn run_axum() {
 
     let app = axum::Router::new()
         .route("/server-browser", axum::routing::get(get_server_browser))
-        .route("/join/:room_id", axum::routing::get(get_join))
-        .route("/join/:room_id", axum::routing::post(post_join))
-        .route("/room/:room_id", axum::routing::get(get_room))
+        .route("/join/:room_id", axum::routing::get(get_join).post(post_join))
+        .route("/room/:room_id", axum::routing::get(get_room).post(post_room))
         .route("/room/:room_id/ws", axum::routing::get(get_room_ws))
         .route("/song/:player_id/:room_id/:random", axum::routing::get(get_song))
         .fallback(fallback)

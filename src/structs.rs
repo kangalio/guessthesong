@@ -17,6 +17,8 @@ pub enum ReceiveEvent {
     StartGame,
     AudioLoaded,
     TypingStatus { typing: bool },
+    SkipRound,
+    StopGame,
 }
 
 #[derive(serde::Serialize)]

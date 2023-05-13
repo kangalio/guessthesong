@@ -43,6 +43,8 @@ async fn play_round(room_arc: std::sync::Arc<parking_lot::Mutex<Room>>) {
     let (mut current_hint, hints) = generate_hints(&song_title, hints_at.len());
     let mut hints_at = hints_at.zip(hints).collect::<std::collections::HashMap<_, _>>();
 
+    tokio::time::sleep(std::time::Duration::from_millis(4000)).await; // idk why
+
     // Start the timer, including countdown
     for timer in (0..=(round_time + 3)).rev() {
         tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
@@ -83,20 +85,20 @@ async fn play_round(room_arc: std::sync::Arc<parking_lot::Mutex<Room>>) {
             }
         }
 
+        // Show scoreboard
+        room.send_all(&SendEvent::Notify { message: format!("The song was: {}", song_title) });
+        room.send_all(&SendEvent::Scoreboard {
+            round: room.current_round + 1,
+            max_rounds: room.num_rounds,
+            payload: room.players.iter().map(|p| p.to_scoreboard_player()).collect(),
+        });
+
         // Advance round, stop if this was the last round
         room.current_round += 1;
         if room.current_round == room.num_rounds {
             // somehow stop the game?!
             return;
         }
-
-        // Show scoreboard
-        room.send_all(&SendEvent::Notify { message: format!("The song was: {}", song_title) });
-        room.send_all(&SendEvent::Scoreboard {
-            round: room.current_round,
-            max_rounds: room.num_rounds,
-            payload: room.players.iter().map(|p| p.to_scoreboard_player()).collect(),
-        });
 
         room.song_provider.clone()
     };
@@ -116,6 +118,76 @@ async fn play_round(room_arc: std::sync::Arc<parking_lot::Mutex<Room>>) {
         }
         room.send_all(&SendEvent::NewTurn);
         room.state = RoomState::WaitingForLoaded;
+    }
+}
+
+fn points_for_guessing_now(room: &Room) -> u32 {
+    let guess_time = (std::time::Instant::now() - room.round_start_time.unwrap()).as_secs_f32();
+    let how_many_others_have_already_guessed =
+        room.players.iter().filter(|p| p.guessed.is_some()).count();
+    let hints_left = ((room.round_time_secs as f32 - guess_time) / 10.0) as u32;
+
+    // This is the original GuessTheSong algorithm as posted by "Frank (11studios)"
+    // in the GuessTheSong.io Discord server
+    // https://discord.com/channels/741670496822886470/741670497304969232/1092483679261053078
+    let mut points = 100;
+    match guess_time {
+        x if x < 10.0 => points += 125,
+        x if x < 20.0 => points += 100,
+        x if x < 25.0 => points += 75,
+        x if x < 45.0 => points += 62,
+        x if x < 70.0 => points += 50,
+        _ => points += 25,
+    }
+    match how_many_others_have_already_guessed {
+        0 => points += 200,
+        1 => points += 150,
+        2 => points += 100,
+        _ => {}
+    }
+    points += u32::min(hints_left * 25, 100);
+
+    points
+}
+
+fn websocket_event(room: &mut Room, player_id: PlayerId, event: ReceiveEvent) {
+    match event {
+        ReceiveEvent::IncomingMsg { msg } => {
+            if msg.to_lowercase() == room.current_song.as_ref().unwrap().title.to_lowercase() {
+                room.players.iter_mut().find(|p| p.id == player_id).unwrap().guessed =
+                    Some(points_for_guessing_now(&room));
+            } else {
+                let player = room.players.iter().find(|p| p.id == player_id).unwrap();
+                room.send_all(&SendEvent::Chat {
+                    r#type: "message".into(),
+                    uuid: player.id,
+                    username: player.name.clone(),
+                    msg,
+                })
+            }
+        }
+        ReceiveEvent::StartGame => {
+            room.send_all(&SendEvent::StartGame);
+            room.state = RoomState::WaitingForReconnect;
+            // Everyone will reconnect now
+        }
+        ReceiveEvent::AudioLoaded => {
+            room.players.iter_mut().find(|p| p.id == player_id).unwrap().loaded = true;
+            // room.send_all(&room.player_state_msg());
+            if room.players.iter().all(|p| p.loaded) && room.state == RoomState::WaitingForLoaded {
+                room.state = RoomState::Playing;
+                room.round_task = Some(spawn_attached(play_round(room_arc.clone())));
+            }
+        }
+        ReceiveEvent::TypingStatus { typing } => {
+            room.send_all(&SendEvent::PlayerTyping { uuid: player_id, typing });
+        }
+        ReceiveEvent::SkipRound => {
+            // STUB
+        }
+        ReceiveEvent::StopGame => {
+            // STUB
+        }
     }
 }
 
@@ -169,72 +241,14 @@ pub async fn websocket_connect(
             unimplemented!();
         }
         RoomState::Playing => {
-            unimplemented!();
+            // Don't have to do anything apparently
         }
     }
 
     while let Some(event) = ws.recv::<ReceiveEvent>().await {
         let mut room = room_arc.lock();
 
-        match event {
-            ReceiveEvent::IncomingMsg { msg } => {
-                if msg.to_lowercase() == room.current_song.as_ref().unwrap().title.to_lowercase() {
-                    let guess_time =
-                        (std::time::Instant::now() - room.round_start_time.unwrap()).as_secs_f32();
-                    let how_many_others_have_already_guessed =
-                        room.players.iter().filter(|p| p.guessed.is_some()).count();
-                    let hints_left = ((room.round_time_secs as f32 - guess_time) / 10.0) as u32;
-
-                    // This is the original GuessTheSong algorithm as posted by "Frank (11studios)"
-                    // in the GuessTheSong.io Discord server
-                    // https://discord.com/channels/741670496822886470/741670497304969232/1092483679261053078
-                    let mut points = 100;
-                    match guess_time {
-                        x if x < 10.0 => points += 125,
-                        x if x < 20.0 => points += 100,
-                        x if x < 25.0 => points += 75,
-                        x if x < 45.0 => points += 62,
-                        x if x < 70.0 => points += 50,
-                        _ => points += 25,
-                    }
-                    match how_many_others_have_already_guessed {
-                        0 => points += 200,
-                        1 => points += 150,
-                        2 => points += 100,
-                        _ => {}
-                    }
-                    points += u32::min(hints_left * 25, 100);
-
-                    room.players.iter_mut().find(|p| p.id == player_id).unwrap().guessed =
-                        Some(points);
-                } else {
-                    let player = room.players.iter().find(|p| p.id == player_id).unwrap();
-                    room.send_all(&SendEvent::Chat {
-                        r#type: "message".into(),
-                        uuid: player.id,
-                        username: player.name.clone(),
-                        msg,
-                    })
-                }
-            }
-            ReceiveEvent::StartGame => {
-                room.send_all(&SendEvent::StartGame);
-                room.state = RoomState::WaitingForReconnect;
-                // Everyone will reconnect now
-            }
-            ReceiveEvent::AudioLoaded => {
-                room.players.iter_mut().find(|p| p.id == player_id).unwrap().loaded = true;
-                if room.players.iter().all(|p| p.loaded)
-                    && room.state == RoomState::WaitingForLoaded
-                {
-                    room.state = RoomState::Playing;
-                    room.round_task = Some(spawn_attached(play_round(room_arc.clone())));
-                }
-            }
-            ReceiveEvent::TypingStatus { typing } => {
-                room.send_all(&SendEvent::PlayerTyping { uuid: player_id, typing });
-            }
-        }
+        websocket_event(&mut *room, player_id, event);
     }
 
     // Player disconnected

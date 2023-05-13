@@ -12,6 +12,14 @@ struct YtdlpPlaylistEntry {
     title: String,
 }
 
+fn sanitize_spotify_title(title: &str) -> String {
+    static REGEX: once_cell::sync::Lazy<regex::Regex> =
+        once_cell::sync::Lazy::new(|| regex::Regex::new(r"( \(.*\))?( - .*)?$").unwrap());
+
+    let Some(match_) = REGEX.find(title) else { return title.to_string() };
+    title[..match_.start()].to_string()
+}
+
 pub enum SongProvider {
     Spotify { spotify: rspotify::ClientCredsSpotify, tracks: Vec<rspotify::model::FullTrack> },
     Youtube { playlist: Vec<YtdlpPlaylistEntry> },
@@ -77,12 +85,13 @@ impl SongProvider {
                     .args(["-o", "-"])
                     .args(["--playlist-end", "1"])
                     // https://www.reddit.com/r/youtubedl/wiki/howdoidownloadpartsofavideo/
-                    .args(["--download-sections", "*0-80"]) // 75s plus a few extra secs
+                    .args(["--download-sections", "*0-100"]) // 75s plus a few extra secs
                     .arg(yt_query)
                     .output()
                     .await
                     .unwrap();
-                Song { title: track.name.clone(), audio: output.stdout }
+
+                Song { title: sanitize_spotify_title(&track.name), audio: output.stdout }
             }
             SongProvider::Youtube { playlist } => {
                 let song = &playlist[fastrand::usize(0..playlist.len())];

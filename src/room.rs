@@ -150,7 +150,13 @@ fn points_for_guessing_now(room: &Room) -> u32 {
     points
 }
 
-fn websocket_event(room: &mut Room, player_id: PlayerId, event: ReceiveEvent) {
+fn websocket_event(
+    room_arc: &std::sync::Arc<parking_lot::Mutex<Room>>,
+    player_id: PlayerId,
+    event: ReceiveEvent,
+) {
+    let mut room = room_arc.lock();
+
     match event {
         ReceiveEvent::IncomingMsg { msg } => {
             if msg.to_lowercase() == room.current_song.as_ref().unwrap().title.to_lowercase() {
@@ -246,9 +252,7 @@ pub async fn websocket_connect(
     }
 
     while let Some(event) = ws.recv::<ReceiveEvent>().await {
-        let mut room = room_arc.lock();
-
-        websocket_event(&mut *room, player_id, event);
+        websocket_event(&room_arc, player_id, event);
     }
 
     // Player disconnected

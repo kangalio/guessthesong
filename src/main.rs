@@ -1,7 +1,8 @@
-mod structs;
+mod hints;
 mod room;
 mod routes;
 mod song_provider;
+mod structs;
 mod utils;
 
 #[tokio::main]

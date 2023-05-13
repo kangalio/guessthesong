@@ -1,34 +1,6 @@
+use crate::hints::*;
 use crate::structs::*;
 use crate::utils::*;
-
-fn generate_hints(title: &str, num_steps: usize) -> (String, Vec<String>) {
-    fn blank_out_indices(s: &str, indices: &[usize]) -> String {
-        s.chars().enumerate().map(|(i, c)| if indices.contains(&i) { '_' } else { c }).collect()
-    }
-
-    let mut indices_hidden = Vec::new();
-    for (i, c) in title.chars().enumerate() {
-        if c.is_alphanumeric() {
-            indices_hidden.push(i);
-        }
-    }
-    let all_blanked_out = blank_out_indices(title, &indices_hidden);
-
-    let mut hints = Vec::new();
-
-    let mut num_hidden = indices_hidden.len() as f32;
-    let num_revealed_per_step = num_hidden / 2.0 / num_steps as f32;
-    for _ in 0..num_steps {
-        num_hidden -= num_revealed_per_step;
-        while indices_hidden.len() as f32 > num_hidden {
-            indices_hidden.remove(fastrand::usize(..indices_hidden.len()));
-        }
-
-        hints.push(blank_out_indices(title, &indices_hidden));
-    }
-
-    (all_blanked_out, hints)
-}
 
 async fn play_round(room_arc: std::sync::Arc<parking_lot::Mutex<Room>>) {
     let (round_time, song_title) = {
@@ -39,9 +11,7 @@ async fn play_round(room_arc: std::sync::Arc<parking_lot::Mutex<Room>>) {
     };
 
     // Pre-generate hints
-    let hints_at = (10..u32::min(round_time, 70)).step_by(10).rev();
-    let (mut current_hint, hints) = generate_hints(&song_title, hints_at.len());
-    let mut hints_at = hints_at.zip(hints).collect::<std::collections::HashMap<_, _>>();
+    let mut hints = Hints::new(&song_title, round_time);
 
     tokio::time::sleep(std::time::Duration::from_millis(4000)).await; // idk why
 
@@ -55,13 +25,9 @@ async fn play_round(room_arc: std::sync::Arc<parking_lot::Mutex<Room>>) {
             break;
         }
 
-        // Update hint
-        if let Some(new_hint) = hints_at.remove(&timer) {
-            current_hint = new_hint;
-        }
         room.send_all(&SendEvent::Timer {
             message: timer,
-            hint: current_hint.clone(),
+            hint: hints.hint_at(timer),
             scores: room.players.iter().map(|p| p.to_player_data()).collect(),
             round_time,
         });

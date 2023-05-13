@@ -1,80 +1,5 @@
-use crate::*;
-
-#[derive(Debug)]
-pub struct Player {
-    /// This must be an Arc to clone it out and avoid locking the room data while waiting for a
-    /// receive event
-    pub ws: Option<std::sync::Arc<WebSocket>>,
-    pub name: String,
-    pub id: PlayerId,
-    pub loaded: bool,
-    pub guessed: Option<u32>, // Points gained
-    pub streak: u32,
-    pub points: u32,
-    pub emoji: String,
-    pub disconnected: bool,
-}
-
-#[derive(Clone, PartialEq, Eq)]
-pub enum RoomState {
-    Lobby,
-    WaitingForReconnect,
-    WaitingForLoaded,
-    Playing,
-}
-
-pub struct Room {
-    // Static data
-    pub name: String,
-    pub password: Option<String>, // If None, room is public
-    // explicit_songs: bool,
-    pub num_rounds: u32,
-    pub round_time_secs: u32,
-    pub created_at: std::time::Instant,
-    pub theme: String,
-
-    pub song_provider: std::sync::Arc<SongProvider>,
-    pub players: Vec<Player>,
-    pub current_round: u32, // zero-indexed
-    pub state: RoomState,
-    pub round_task: Option<AttachedTask>,
-    pub current_song: Option<Song>,
-    pub round_start_time: Option<std::time::Instant>,
-}
-
-impl Room {
-    pub fn send_all(&self, msg: &SendEvent) {
-        for player in &self.players {
-            if let Some(ws) = &player.ws {
-                ws.send(msg);
-            }
-        }
-    }
-
-    pub fn player_datas(&self) -> Vec<SinglePlayerData> {
-        self.players
-            .iter()
-            .map(|p| SinglePlayerData {
-                uuid: p.id,
-                username: p.name.clone(),
-                points: p.points,
-                prev_points: p.points - p.guessed.unwrap_or(0),
-                streak: p.streak,
-                emoji: p.emoji.clone(),
-                loaded: p.loaded,
-                guessed: p.guessed.is_some(),
-                disconnected: p.disconnected,
-            })
-            .collect()
-    }
-
-    pub fn player_state_msg(&self) -> SendEvent {
-        SendEvent::PlayerData {
-            payload: self.player_datas(),
-            owner: self.players.first().unwrap().id,
-        }
-    }
-}
+use crate::structs::*;
+use crate::utils::*;
 
 fn generate_hints(title: &str, num_steps: usize) -> (String, Vec<String>) {
     fn blank_out_indices(s: &str, indices: &[usize]) -> String {
@@ -135,7 +60,7 @@ async fn play_round(room_arc: std::sync::Arc<parking_lot::Mutex<Room>>) {
         room.send_all(&SendEvent::Timer {
             message: timer,
             hint: current_hint.clone(),
-            scores: room.player_datas(),
+            scores: room.players.iter().map(|p| p.to_player_data()).collect(),
             round_time,
         });
 
@@ -170,18 +95,7 @@ async fn play_round(room_arc: std::sync::Arc<parking_lot::Mutex<Room>>) {
         room.send_all(&SendEvent::Scoreboard {
             round: room.current_round,
             max_rounds: room.num_rounds,
-            payload: room
-                .players
-                .iter()
-                .map(|p| ScoreboardPlayer {
-                    uuid: p.id,
-                    display_name: p.name.clone(),
-                    points: p.points,
-                    points_diff: p.guessed.unwrap_or(0),
-                    prev_points: p.points - p.guessed.unwrap_or(0),
-                    streak: p.streak,
-                })
-                .collect(),
+            payload: room.players.iter().map(|p| p.to_scoreboard_player()).collect(),
         });
 
         room.song_provider.clone()

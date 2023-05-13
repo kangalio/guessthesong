@@ -94,36 +94,3 @@ impl Drop for AttachedTask {
 pub fn spawn_attached(f: impl std::future::Future<Output = ()> + Send + 'static) -> AttachedTask {
     AttachedTask(tokio::spawn(f))
 }
-
-/// FUCK YOU futures for making every interaction with you an absolute pain in the ass
-///
-/// This wrapper function is how a functioning brain would do API design
-pub async fn select_all<T>(
-    futures: impl IntoIterator<Item = impl std::future::Future<Output = T>>,
-) -> T {
-    // use std::future::Future as _;
-    // let mut futures = futures.into_iter().map(Box::pin).collect::<Vec<_>>();
-    // std::future::poll_fn(move |cx| {
-    //     for mut future in std::mem::take(&mut futures) {
-    //         match std::pin::Pin::new(&mut future).poll(cx) {
-    //             std::task::Poll::Ready(value) => return std::task::Poll::Ready(value),
-    //             std::task::Poll::Pending => {}
-    //         }
-    //     }
-    //     std::task::Poll::Pending
-    // })
-    // .await
-
-    // use futures::StreamExt as _;
-    // match futures.into_iter().collect::<futures::stream::FuturesUnordered<_>>().next().await {
-    //     Some(x) => x,
-    //     None => std::future::pending().await,
-    // }
-
-    let futures = futures.into_iter().collect::<Vec<_>>();
-    // Guard against select_all's braindead panic
-    if futures.is_empty() {
-        return std::future::pending().await;
-    }
-    futures::future::select_all(futures.into_iter().map(Box::pin)).await.0
-}

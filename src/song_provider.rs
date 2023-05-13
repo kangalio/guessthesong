@@ -1,4 +1,8 @@
-use crate::*;
+#[derive(Clone)]
+pub struct Song {
+    pub title: String,
+    pub audio: Vec<u8>,
+}
 
 /* use rspotify::prelude::BaseClient;
 

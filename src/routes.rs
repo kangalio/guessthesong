@@ -1,7 +1,38 @@
-use crate::*;
+use crate::structs::*;
+use crate::room::*;
+use crate::song_provider::*;
+use crate::utils::*;
+
+const EMOJIS: &[&str] = &[
+    "😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣", "😇", "🙂", "🙃", "😉", "😌", "😍", "😘", "😗",
+    "😙", "😚", "😋", "😛", "😝", "😜", "🤪", "🤨", "🧐", "🤓", "😎", "🤩", "😏", "😒", "😞", "😔",
+    "😟", "😕", "🙁", "☹️", "😣", "😖", "😫", "😩", "😢", "😭", "😤", "😠", "😡", "🤬", "🤯", "😳",
+    "😱", "😨", "😰", "😥", "😓", "🤥", "😶", "😐", "😑", "😬", "🙄", "😯", "😦", "😧", "😮", "😲",
+    "😴", "🤤", "😪", "😵", "🤐", "🤢", "🤮", "🤧", "😷", "🤒", "🤕", "🤑", "🤠", "😈", "👿", "👹",
+    "👺", "🤡", "💩", "💀", "☠️", "👽", "👾", "🤖", "🎃", "😺", "😸", "😹", "😻", "😼", "😽", "🙀",
+    "😿", "😾", "👶", "🧒", "👦", "👧", "🧑", "👩", "🧓", "👴", "👵", "🐶", "🐱", "🐭", "🐹", "🐰",
+    "🦊", "🐻", "🐼", "🐨", "🐯", "🦁", "🐮", "🐷", "🐽", "🐸", "🐵", "🙈", "🙉", "🙊",
+];
+
+pub struct State {
+    rooms: parking_lot::Mutex<
+        std::collections::HashMap<u32, std::sync::Arc<parking_lot::Mutex<Room>>>,
+    >,
+}
+
+fn gen_id() -> PlayerId {
+    fn nanos_since_startup() -> u128 {
+        thread_local! {
+            static START_TIME: std::time::Instant = std::time::Instant::now();
+        }
+        START_TIME.with(|&start_time| std::time::Instant::now() - start_time).as_nanos()
+    }
+
+    PlayerId((nanos_since_startup() / 1000) as u32)
+}
 
 pub async fn get_server_browser(
-    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::State>>,
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<State>>,
     ws: axum::extract::WebSocketUpgrade,
 ) -> impl axum::response::IntoResponse {
     ws.on_upgrade(move |ws| async move {
@@ -53,12 +84,12 @@ pub struct PostJoinForm {
 }
 
 pub async fn post_join(
-    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::State>>,
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<State>>,
     axum::extract::TypedHeader(cookies): axum::extract::TypedHeader<axum::headers::Cookie>,
     axum::extract::Form(form): axum::extract::Form<PostJoinForm>,
 ) -> Result<impl axum::response::IntoResponse, axum::response::ErrorResponse> {
     let PostJoinForm { username, room_code } = form;
-    let player_id = crate::gen_id();
+    let player_id = gen_id();
     let room = state
         .rooms
         .lock()
@@ -72,10 +103,9 @@ pub async fn post_join(
         id: player_id,
         loaded: false,
         guessed: None,
-        disconnected: false,
         points: 0,
         streak: 0,
-        emoji: crate::EMOJIS[cookies.get("emoji").unwrap().parse::<usize>().unwrap()].to_string(),
+        emoji: EMOJIS[cookies.get("emoji").unwrap().parse::<usize>().unwrap()].to_string(),
         ws: None,
     });
     let player = room.players.last().unwrap();
@@ -96,7 +126,7 @@ pub async fn post_join(
 }
 
 pub async fn get_room(
-    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::State>>,
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<State>>,
     axum::extract::TypedHeader(cookies): axum::extract::TypedHeader<axum::headers::Cookie>,
     axum::extract::Path(room_id): axum::extract::Path<u32>,
 ) -> Result<impl axum::response::IntoResponse, axum::response::ErrorResponse> {
@@ -129,7 +159,7 @@ pub async fn get_room(
 }
 
 pub async fn get_room_ws(
-    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::State>>,
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<State>>,
     axum::extract::Path(room_id): axum::extract::Path<u32>,
     axum::extract::TypedHeader(cookies): axum::extract::TypedHeader<axum::headers::Cookie>,
     ws: axum::extract::WebSocketUpgrade,
@@ -143,7 +173,7 @@ pub async fn get_room_ws(
 }
 
 pub async fn get_song(
-    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::State>>,
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<State>>,
     axum::extract::Path((_player_id, room_id, _random)): axum::extract::Path<(u32, u32, u32)>,
     axum::extract::TypedHeader(cookies): axum::extract::TypedHeader<axum::headers::Cookie>,
 ) -> impl axum::response::IntoResponse {
@@ -165,4 +195,42 @@ pub async fn fallback(uri: axum::http::Uri) -> impl axum::response::IntoResponse
             Err(axum::response::Redirect::to(&format!("https://guessthesong.io{}", uri.path())))
         }
     }
+}
+
+pub async fn run_axum() {
+    let state = std::sync::Arc::new(State {
+        rooms: parking_lot::Mutex::new(From::from([(
+            420,
+            std::sync::Arc::new(parking_lot::Mutex::new(Room {
+                name: "starter room lol".to_string(),
+                players: Vec::new(),
+                password: None,
+                num_rounds: 9,
+                round_time_secs: 75,
+                created_at: std::time::Instant::now(),
+                state: RoomState::Lobby,
+                round_task: None,
+                song_provider: std::sync::Arc::new(SongProvider::new()),
+                theme: "Random Songs".into(),
+                current_song: None,
+                round_start_time: None,
+                current_round: 0,
+            })),
+        )])),
+    });
+
+    let app = axum::Router::new()
+        .route("/server-browser", axum::routing::get(get_server_browser))
+        .route("/join/:room_id", axum::routing::get(get_join))
+        .route("/join/:room_id", axum::routing::post(post_join))
+        .route("/room/:room_id", axum::routing::get(get_room))
+        .route("/room/:room_id/ws", axum::routing::get(get_room_ws))
+        .route("/song/:player_id/:room_id/:random", axum::routing::get(get_song))
+        .fallback(fallback)
+        .with_state(state);
+
+    axum::Server::bind(&std::net::SocketAddr::from(([127, 0, 0, 1], 5234)))
+        .serve(app.into_make_service())
+        .await
+        .unwrap();
 }

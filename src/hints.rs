@@ -35,8 +35,8 @@ pub struct Hints {
 impl Hints {
     pub fn new(song_title: &str, round_time: u32) -> Self {
         let hints_at = (10..u32::min(round_time, 70)).step_by(10).rev();
-        let (mut current_hint, hints) = generate_hints(song_title, hints_at.len());
-        let mut hints_at = hints_at.zip(hints).collect::<std::collections::HashMap<_, _>>();
+        let (current_hint, hints) = generate_hints(song_title, hints_at.len());
+        let hints_at = hints_at.zip(hints).collect::<std::collections::HashMap<_, _>>();
         Self { current_hint, hints_at }
     }
 

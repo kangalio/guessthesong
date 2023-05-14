@@ -1,9 +1,9 @@
-mod hints;
-mod room;
-mod routes;
-mod song_provider;
-mod structs;
-mod utils;
+pub mod hints;
+pub mod room;
+pub mod routes;
+pub mod song_provider;
+pub mod structs;
+pub mod utils;
 
 #[tokio::main]
 async fn main() {

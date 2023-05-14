@@ -20,14 +20,18 @@ fn sanitize_spotify_title(title: &str) -> String {
     title[..match_.start()].to_string()
 }
 
-pub enum SongProvider {
-    Spotify { spotify: rspotify::ClientCredsSpotify, tracks: Vec<rspotify::model::FullTrack> },
-    Youtube { playlist: Vec<YtdlpPlaylistEntry> },
+enum Playlist {
+    Spotify(Vec<rspotify::model::FullTrack>),
+    Youtube(Vec<YtdlpPlaylistEntry>),
+}
+
+pub struct SongProvider {
+    playlist: Playlist,
 }
 
 impl SongProvider {
     pub async fn new_spotify(playlist_id: &str) -> Self {
-        let mut spotify = rspotify::ClientCredsSpotify::new(rspotify::Credentials {
+        let spotify = rspotify::ClientCredsSpotify::new(rspotify::Credentials {
             id: "0536121d4660414d9cc90962834cd390".into(),
             secret: Some("8a0f2d3327b749e39b9c50ed3deb218f".into()),
         });
@@ -37,7 +41,7 @@ impl SongProvider {
             .playlist(rspotify::model::PlaylistId::from_id(playlist_id).unwrap(), None, None)
             .await
             .unwrap();
-        let tracks = playlist
+        let playlist = playlist
             .tracks
             .items
             .into_iter()
@@ -46,7 +50,7 @@ impl SongProvider {
                 _ => None,
             })
             .collect();
-        Self::Spotify { spotify, tracks }
+        Self { playlist: Playlist::Spotify(playlist) }
     }
 
     pub fn new_youtube() -> Self {
@@ -59,12 +63,12 @@ impl SongProvider {
         let output = String::from_utf8_lossy(&output.stdout);
 
         let playlist = output.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
-        Self::Youtube { playlist }
+        Self { playlist: Playlist::Youtube(playlist) }
     }
 
     pub async fn next(&self) -> Song {
-        match self {
-            SongProvider::Spotify { spotify, tracks } => {
+        match &self.playlist {
+            Playlist::Spotify(tracks) => {
                 let track = &tracks[fastrand::usize(0..tracks.len())];
 
                 // "...?q=$($artist),* - $title"
@@ -93,7 +97,7 @@ impl SongProvider {
 
                 Song { title: sanitize_spotify_title(&track.name), audio: output.stdout }
             }
-            SongProvider::Youtube { playlist } => {
+            Playlist::Youtube(playlist) => {
                 let song = &playlist[fastrand::usize(0..playlist.len())];
 
                 let output = tokio::process::Command::new("yt-dlp")

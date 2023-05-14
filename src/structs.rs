@@ -76,6 +76,9 @@ pub enum SendEvent {
     NewTurn,
     Scoreboard { payload: Vec<ScoreboardPlayer>, round: u32, max_rounds: u32 },
     StartGame,
+    GameEnded,
+    #[serde(rename = "game-killed")] #[rustfmt::skip] GameKilled,
+    GameReload,
 }
 
 #[derive(Debug)]
@@ -124,7 +127,7 @@ pub enum RoomState {
     Lobby,
     WaitingForReconnect,
     WaitingForLoaded,
-    Playing,
+    RoundStarted,
 }
 
 pub struct Room {

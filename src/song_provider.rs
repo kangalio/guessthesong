@@ -6,7 +6,7 @@ pub struct Song {
     pub audio: Vec<u8>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Clone, serde::Deserialize)]
 struct YtdlpPlaylistEntry {
     url: String,
     title: String,
@@ -25,11 +25,73 @@ enum Playlist {
     Youtube(Vec<YtdlpPlaylistEntry>),
 }
 
+fn download_random_song_in_background(playlist: &Playlist) -> tokio::task::JoinHandle<Song> {
+    match &playlist {
+        Playlist::Spotify(tracks) => {
+            let track = &tracks[fastrand::usize(0..tracks.len())];
+            let title = track.name.clone();
+
+            // "...?q=$($artist),* - $title"
+            let mut yt_query = "https://music.youtube.com/search?q=".to_string();
+            let mut artists = track.artists.iter();
+            if let Some(artist) = artists.next() {
+                yt_query += &artist.name;
+            }
+            for artist in artists {
+                yt_query += ", ";
+                yt_query += &artist.name;
+            }
+            yt_query += " - ";
+            yt_query += &title;
+
+            tokio::spawn(async move {
+                let output = tokio::process::Command::new("yt-dlp")
+                    .arg("-x")
+                    .args(["-o", "-"])
+                    .args(["--playlist-end", "1"])
+                    // https://www.reddit.com/r/youtubedl/wiki/howdoidownloadpartsofavideo/
+                    .args(["--download-sections", "*0-100"]) // 75s plus a few extra secs
+                    .arg(yt_query)
+                    .output()
+                    .await
+                    .unwrap();
+
+                Song { title: sanitize_spotify_title(&title), audio: output.stdout }
+            })
+        }
+        Playlist::Youtube(playlist) => {
+            let song = playlist[fastrand::usize(0..playlist.len())].clone();
+
+            tokio::spawn(async move {
+                let output = tokio::process::Command::new("yt-dlp")
+                    .arg("-x")
+                    .arg("-o")
+                    .arg("-")
+                    .arg(&song.url)
+                    .output()
+                    .await
+                    .unwrap();
+                Song { title: song.title.clone(), audio: output.stdout }
+            })
+        }
+    }
+}
+
 pub struct SongProvider {
     playlist: Playlist,
+    background_downloader: parking_lot::Mutex<tokio::task::JoinHandle<Song>>,
 }
 
 impl SongProvider {
+    fn new(playlist: Playlist) -> Self {
+        Self {
+            background_downloader: parking_lot::Mutex::new(download_random_song_in_background(
+                &playlist,
+            )),
+            playlist,
+        }
+    }
+
     pub async fn new_spotify(playlist_id: &str) -> Self {
         let spotify = rspotify::ClientCredsSpotify::new(rspotify::Credentials {
             id: "0536121d4660414d9cc90962834cd390".into(),
@@ -50,66 +112,30 @@ impl SongProvider {
                 _ => None,
             })
             .collect();
-        Self { playlist: Playlist::Spotify(playlist) }
+
+        Self::new(Playlist::Spotify(playlist))
     }
 
-    pub fn new_youtube() -> Self {
-        let output = std::process::Command::new("yt-dlp")
+    pub async fn new_youtube() -> Self {
+        let output = tokio::process::Command::new("yt-dlp")
             .arg("--dump-json")
             .arg("--flat-playlist")
             .arg("https://www.youtube.com/watch?v=2iRdKLodaXM&list=PL77D8FE68A35A932A")
             .output()
+            .await
             .unwrap();
         let output = String::from_utf8_lossy(&output.stdout);
 
         let playlist = output.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
-        Self { playlist: Playlist::Youtube(playlist) }
+
+        Self::new(Playlist::Youtube(playlist))
     }
 
     pub async fn next(&self) -> Song {
-        match &self.playlist {
-            Playlist::Spotify(tracks) => {
-                let track = &tracks[fastrand::usize(0..tracks.len())];
-
-                // "...?q=$($artist),* - $title"
-                let mut yt_query = "https://music.youtube.com/search?q=".to_string();
-                let mut artists = track.artists.iter();
-                if let Some(artist) = artists.next() {
-                    yt_query += &artist.name;
-                }
-                for artist in artists {
-                    yt_query += ", ";
-                    yt_query += &artist.name;
-                }
-                yt_query += " - ";
-                yt_query += &track.name;
-
-                let output = tokio::process::Command::new("yt-dlp")
-                    .arg("-x")
-                    .args(["-o", "-"])
-                    .args(["--playlist-end", "1"])
-                    // https://www.reddit.com/r/youtubedl/wiki/howdoidownloadpartsofavideo/
-                    .args(["--download-sections", "*0-100"]) // 75s plus a few extra secs
-                    .arg(yt_query)
-                    .output()
-                    .await
-                    .unwrap();
-
-                Song { title: sanitize_spotify_title(&track.name), audio: output.stdout }
-            }
-            Playlist::Youtube(playlist) => {
-                let song = &playlist[fastrand::usize(0..playlist.len())];
-
-                let output = tokio::process::Command::new("yt-dlp")
-                    .arg("-x")
-                    .arg("-o")
-                    .arg("-")
-                    .arg(&song.url)
-                    .output()
-                    .await
-                    .unwrap();
-                Song { title: song.title.clone(), audio: output.stdout }
-            }
-        }
+        let background_downloader = std::mem::replace(
+            &mut *self.background_downloader.lock(),
+            download_random_song_in_background(&self.playlist),
+        );
+        background_downloader.await.unwrap()
     }
 }

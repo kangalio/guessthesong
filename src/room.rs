@@ -134,18 +134,21 @@ async fn websocket_event(
         ReceiveEvent::IncomingMsg { msg } => {
             let mut room = room_arc.lock();
 
-            if msg.to_lowercase() == room.current_song.as_ref().unwrap().title.to_lowercase() {
-                room.players.iter_mut().find(|p| p.id == player_id).unwrap().guessed =
-                    Some(points_for_guessing_now(&room));
-            } else {
-                let player = room.players.iter().find(|p| p.id == player_id).unwrap();
-                room.send_all(&SendEvent::Chat {
-                    r#type: "message".into(),
-                    uuid: player.id,
-                    username: player.name.clone(),
-                    msg,
-                })
+            if let Some(current_song) = &room.current_song {
+                if msg.to_lowercase() == current_song.title.to_lowercase() {
+                    room.players.iter_mut().find(|p| p.id == player_id).unwrap().guessed =
+                        Some(points_for_guessing_now(&room));
+                    return;
+                }
             }
+
+            let player = room.players.iter().find(|p| p.id == player_id).unwrap();
+            room.send_all(&SendEvent::Chat {
+                r#type: "message".into(),
+                uuid: player.id,
+                username: player.name.clone(),
+                msg,
+            });
         }
         ReceiveEvent::StartGame => {
             let mut room = room_arc.lock();

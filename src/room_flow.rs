@@ -75,7 +75,7 @@ async fn play_round(room: &parking_lot::Mutex<Room>) {
         let mut room = room.lock();
 
         // Go straight to next round if everyone guessed
-        if room.players.iter().all(|p| p.guessed.is_some()) {
+        if room.players.iter().all(|p| p.guessed.is_some() && p.ws.lock().is_some()) {
             break;
         }
 

@@ -35,6 +35,15 @@ async fn finalize_round_and_kick_off_next_maybe(room: &parking_lot::Mutex<Room>)
         room.current_round += 1;
         if room.current_round == room.num_rounds {
             room.send_all(&SendEvent::GameEnded);
+            for player in &mut room.players {
+                player.loaded = false;
+                player.guessed = None;
+                player.streak = 0;
+                player.points = 0;
+            }
+            room.current_round = 0;
+            room.current_song = None;
+            room.round_start_time = None;
             room.state = RoomState::Lobby;
             return;
         }

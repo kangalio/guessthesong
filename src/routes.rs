@@ -341,7 +341,7 @@ pub async fn run_axum() {
 
     let app = axum::Router::new()
         .route("/server-browser/ws", axum::routing::get(get_server_browser_ws))
-        .route("/create-room.html", axum::routing::post(post_create_room))
+        .route("/create-room.html", axum::routing::get(fallback).post(post_create_room))
         .route("/join/:room_id", axum::routing::get(get_join).post(post_join))
         .route("/room/:room_id", axum::routing::get(get_room).post(post_room))
         .route("/room/:room_id/ws", axum::routing::get(get_room_ws))

@@ -1,6 +1,7 @@
 use crate::hints::*;
-use crate::structs::*;
+use crate::room_structs::*;
 use crate::utils::*;
+use crate::ws_structs::*;
 
 async fn finalize_round_and_kick_off_next_maybe(room: &parking_lot::Mutex<Room>) {
     let song_provider = {

@@ -95,6 +95,15 @@ async fn play_round(room: &parking_lot::Mutex<Room>) {
     finalize_round_and_kick_off_next_maybe(room).await;
 }
 
+fn title_matches(title: &str, input: &str) -> bool {
+    fn strip_punctuation_and_make_lowercase(s: &str) -> String {
+        s.chars().filter(|c| c.is_alphabetic()).flat_map(|c| c.to_lowercase()).collect()
+    }
+    let title = strip_punctuation_and_make_lowercase(title);
+    let input = strip_punctuation_and_make_lowercase(input);
+    levenshtein::levenshtein(&title, &input) <= title.len() / 10
+}
+
 fn points_for_guessing_now(room: &Room) -> u32 {
     let guess_time = (std::time::Instant::now() - room.round_start_time.unwrap()).as_secs_f32();
     let how_many_others_have_already_guessed =
@@ -134,7 +143,7 @@ async fn websocket_event(
             let mut room = room_arc.lock();
 
             if let Some(current_song) = &room.current_song {
-                if msg.to_lowercase() == current_song.title.to_lowercase() {
+                if title_matches(&current_song.title, &msg) {
                     room.players.iter_mut().find(|p| p.id == player_id).unwrap().guessed =
                         Some(points_for_guessing_now(&room));
 

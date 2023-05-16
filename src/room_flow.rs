@@ -22,10 +22,13 @@ async fn finalize_round_and_kick_off_next_maybe(room: &parking_lot::Mutex<Room>)
         // Show scoreboard
         let song_title = &room.current_song.as_ref().unwrap().title;
         room.send_all(&SendEvent::Notify { message: format!("The song was: {}", song_title) });
+        let mut scoreboard_entries =
+            room.players.iter().map(|p| p.to_scoreboard_player()).collect::<Vec<_>>();
+        scoreboard_entries.sort_by_key(|player| std::cmp::Reverse(player.points));
         room.send_all(&SendEvent::Scoreboard {
             round: room.current_round + 1,
             max_rounds: room.num_rounds,
-            payload: room.players.iter().map(|p| p.to_scoreboard_player()).collect(),
+            payload: scoreboard_entries,
         });
 
         // Advance round, stop if this was the last round

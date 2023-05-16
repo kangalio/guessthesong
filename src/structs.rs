@@ -39,8 +39,7 @@ pub struct ScoreboardPlayer {
     pub uuid: PlayerId,
     pub display_name: String,
     pub points: u32,
-    pub points_diff: u32,
-    pub prev_points: u32,
+    pub point_diff: u32,
     pub streak: u32,
 }
 
@@ -102,8 +101,7 @@ impl Player {
             uuid: self.id,
             display_name: self.name.clone(),
             points: self.points,
-            points_diff: self.guessed.unwrap_or(0),
-            prev_points: self.points - self.guessed.unwrap_or(0),
+            point_diff: self.guessed.unwrap_or(0),
             streak: self.streak,
         }
     }

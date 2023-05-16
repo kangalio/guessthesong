@@ -286,7 +286,7 @@ pub async fn get_room_ws(
 
 pub async fn get_song(
     axum::extract::State(state): axum::extract::State<std::sync::Arc<State>>,
-    axum::extract::Path((_player_id, room_id, _random)): axum::extract::Path<(u32, u32, u32)>,
+    axum::extract::Path((_player_id, room_id, _random)): axum::extract::Path<(u64, u32, u64)>,
     axum::extract::TypedHeader(cookies): axum::extract::TypedHeader<axum::headers::Cookie>,
 ) -> impl axum::response::IntoResponse {
     let player_id = PlayerId(cookies.get("user").unwrap().parse().unwrap());

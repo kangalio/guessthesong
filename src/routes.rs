@@ -28,7 +28,7 @@ fn gen_id() -> PlayerId {
         START_TIME.with(|&start_time| std::time::Instant::now() - start_time).as_nanos()
     }
 
-    PlayerId((nanos_since_startup() / 1000) as u32)
+    PlayerId(nanos_since_startup() as u64)
 }
 
 pub async fn get_server_browser(
@@ -126,6 +126,61 @@ pub async fn post_join(
 }
 
 #[derive(serde::Deserialize)]
+pub struct CreateRoomForm {
+    username: String,
+    room_name: String,
+    playlist: String,
+    password: String,
+    rounds: u32,
+    round_time: u32,
+}
+
+pub async fn post_create_room(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<State>>,
+    axum::extract::TypedHeader(cookies): axum::extract::TypedHeader<axum::headers::Cookie>,
+    axum::extract::Form(form): axum::extract::Form<CreateRoomForm>,
+) -> Result<impl axum::response::IntoResponse, axum::response::ErrorResponse> {
+    let player_id = gen_id();
+
+    let new_room = Room {
+        name: form.room_name,
+        password: if form.password.is_empty() { None } else { Some(form.password) },
+        num_rounds: form.rounds,
+        round_time_secs: form.round_time,
+        created_at: std::time::Instant::now(),
+        theme: "TODO".into(),
+        song_provider: std::sync::Arc::new(SongProvider::from_any_url(&form.playlist).await),
+        players: vec![Player {
+            ws: None,
+            name: form.username,
+            id: player_id,
+            loaded: false,
+            guessed: None,
+            streak: 0,
+            points: 0,
+            emoji: EMOJIS[cookies.get("emoji").unwrap().parse::<usize>().unwrap()].to_string(),
+        }],
+        state: RoomState::Lobby,
+        current_round: 0,
+        round_task: None,
+        current_song: None,
+        round_start_time: None,
+    };
+
+    let mut rooms = state.rooms.lock();
+    let new_room_id = rooms.keys().max().map_or(0, |largest_id| largest_id + 1);
+    rooms.insert(new_room_id, std::sync::Arc::new(parking_lot::Mutex::new(new_room)));
+
+    Ok((
+        axum::response::AppendHeaders([(
+            axum::http::header::SET_COOKIE,
+            format!("user={}; Path=/", player_id.0),
+        )]),
+        axum::response::Redirect::to(&format!("/room/{}", new_room_id)),
+    ))
+}
+
+#[derive(serde::Deserialize)]
 pub struct RoomSettings {
     room_name: String,
     rounds: u32,
@@ -138,7 +193,10 @@ fn get_or_post_room(
     room_id: u32,
     apply_settings: Option<RoomSettings>,
 ) -> Result<impl axum::response::IntoResponse, axum::response::ErrorResponse> {
-    let player_id = PlayerId(cookies.get("user").unwrap().parse().unwrap());
+    let player_id = cookies
+        .get("user")
+        .ok_or_else(|| axum::response::Redirect::to(&format!("/join/{}", room_id)))?;
+    let player_id = PlayerId(player_id.parse().unwrap());
     let room = state
         .rooms
         .lock()
@@ -220,12 +278,18 @@ pub async fn get_song(
 }
 
 pub async fn fallback(uri: axum::http::Uri) -> impl axum::response::IntoResponse {
-    match tokio::fs::read_to_string(format!("frontend{}", uri.path())).await {
-        Ok(resp) => Ok(axum::response::Html(resp)),
-        Err(_) => {
-            Err(axum::response::Redirect::to(&format!("https://guessthesong.io{}", uri.path())))
-        }
+    let mut path = uri.path().to_string();
+    if path == "/" {
+        path = "/index.html".to_string();
     }
+
+    if let Ok(file) = tokio::fs::read_to_string(format!("frontend{}", &path)).await {
+        return Ok(axum::response::Html(file));
+    }
+    if let Ok(file) = tokio::fs::read_to_string(format!("frontend{}.html", &path)).await {
+        return Ok(axum::response::Html(file));
+    }
+    Err(axum::response::Redirect::to(&format!("https://guessthesong.io{}", uri.path())))
 }
 
 pub async fn run_axum() {
@@ -242,7 +306,7 @@ pub async fn run_axum() {
                 state: RoomState::Lobby,
                 round_task: None,
                 song_provider: std::sync::Arc::new(
-                    SongProvider::new_spotify("5wWUVh8qv6YygjbNZCckFl").await,
+                    SongProvider::from_spotify_playlist("5wWUVh8qv6YygjbNZCckFl").await,
                 ),
                 theme: "Random Songs".into(),
                 current_song: None,
@@ -254,6 +318,7 @@ pub async fn run_axum() {
 
     let app = axum::Router::new()
         .route("/server-browser", axum::routing::get(get_server_browser))
+        .route("/create-room.html", axum::routing::post(post_create_room))
         .route("/join/:room_id", axum::routing::get(get_join).post(post_join))
         .route("/room/:room_id", axum::routing::get(get_room).post(post_room))
         .route("/room/:room_id/ws", axum::routing::get(get_room_ws))
@@ -261,7 +326,7 @@ pub async fn run_axum() {
         .fallback(fallback)
         .with_state(state);
 
-    axum::Server::bind(&std::net::SocketAddr::from(([127, 0, 0, 1], 5234)))
+    axum::Server::bind(&std::net::SocketAddr::from(([0, 0, 0, 0], 8787)))
         .serve(app.into_make_service())
         .await
         .unwrap();

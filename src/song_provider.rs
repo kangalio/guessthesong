@@ -92,7 +92,21 @@ impl SongProvider {
         }
     }
 
-    pub async fn new_spotify(playlist_id: &str) -> Self {
+    pub async fn from_any_url(url: &str) -> Self {
+        use once_cell::sync::Lazy;
+        static SPOTIFY_URL_REGEX: Lazy<regex::Regex> =
+            Lazy::new(|| regex::Regex::new("spotify.com/playlist/([^?/]+)").unwrap());
+        if let Some(captures) = SPOTIFY_URL_REGEX.captures(url) {
+            let playlist_id = captures.get(1).unwrap().as_str();
+            return Self::from_spotify_playlist(playlist_id).await;
+        }
+        if url.contains("youtube.com") {
+            return Self::from_youtube_playlist(url).await;
+        }
+        panic!("invalid URL: {}", url);
+    }
+
+    pub async fn from_spotify_playlist(playlist_id: &str) -> Self {
         let spotify = rspotify::ClientCredsSpotify::new(rspotify::Credentials {
             id: "0536121d4660414d9cc90962834cd390".into(),
             secret: Some("8a0f2d3327b749e39b9c50ed3deb218f".into()),
@@ -116,11 +130,11 @@ impl SongProvider {
         Self::new(Playlist::Spotify(playlist))
     }
 
-    pub async fn new_youtube() -> Self {
+    pub async fn from_youtube_playlist(url: &str) -> Self {
         let output = tokio::process::Command::new("yt-dlp")
             .arg("--dump-json")
             .arg("--flat-playlist")
-            .arg("https://www.youtube.com/watch?v=2iRdKLodaXM&list=PL77D8FE68A35A932A")
+            .arg(url)
             .output()
             .await
             .unwrap();

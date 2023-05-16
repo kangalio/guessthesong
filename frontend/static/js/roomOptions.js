@@ -8,10 +8,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function updateView() {
     const gameMode = document.getElementById('game_mode');
-    const theme = document.getElementById('theme');
+    const playlist = document.getElementById('playlist');
     const explicit = document.getElementById('explicit');
 
-    if (gameMode === null || explicit === null || theme === null) {
+    if (gameMode === null || explicit === null || playlist === null) {
         return;
     }
 
@@ -30,7 +30,7 @@ function updateView() {
         document.getElementById('advancedSettings').className = 'collapse';
     }
 
-    if (nonExplicitThemes.includes(theme.value))
+    if (nonExplicitThemes.includes(playlist.value))
         explicit.removeAttribute('disabled');
     else
         explicit.setAttribute('disabled', '');

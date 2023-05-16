@@ -12,6 +12,7 @@ async fn advance_round(room: &parking_lot::Mutex<Room>) {
         room.current_round += 1;
         if room.current_round == room.num_rounds {
             room.send_all(&SendEvent::GameEnded);
+            room.state = RoomState::Lobby;
             return;
         }
 
@@ -138,6 +139,7 @@ async fn websocket_event(
                 if msg.to_lowercase() == current_song.title.to_lowercase() {
                     room.players.iter_mut().find(|p| p.id == player_id).unwrap().guessed =
                         Some(points_for_guessing_now(&room));
+                    room.send_all(&room.player_state_msg());
                     return;
                 }
             }
@@ -204,6 +206,9 @@ pub async fn websocket_connect(
 
         if let Some(player) = room.players.iter_mut().find(|p| p.id == player_id) {
             player.ws = Some(ws.clone());
+        } else {
+            log::warn!("no player with ID {} has joined!", player_id.0);
+            return;
         }
         room.state.clone()
     };
@@ -211,7 +216,7 @@ pub async fn websocket_connect(
         RoomState::Lobby => {
             let room = room_arc.lock();
 
-            // Notify newly joined players about all existing players
+            // Notify newly joined player about all existing players
             for player in &room.players {
                 ws.send(&SendEvent::Join {
                     message: player.name.clone(),
@@ -238,11 +243,15 @@ pub async fn websocket_connect(
                 room.state = RoomState::WaitingForLoaded;
             }
         }
-        RoomState::WaitingForLoaded => {
-            unimplemented!();
-        }
-        RoomState::RoundStarted => {
-            // Don't have to do anything apparently
+        RoomState::WaitingForLoaded | RoomState::RoundStarted => {
+            let room = room_arc.lock();
+
+            // room.send_all(&SendEvent::Join {
+            //     message: player.name.clone(),
+            //     payload: Box::new(room.player_state_msg()),
+            // });
+            room.send_all(&room.player_state_msg());
+            room.send_all(&SendEvent::ResumeAudio);
         }
     }
 

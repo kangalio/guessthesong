@@ -2,7 +2,7 @@ use crate::song_provider::*;
 use crate::utils::*;
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
-pub struct PlayerId(pub u32);
+pub struct PlayerId(pub u64);
 impl serde::Serialize for PlayerId {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.0.to_string().serialize(serializer)
@@ -79,6 +79,7 @@ pub enum SendEvent {
     GameEnded,
     #[serde(rename = "game-killed")] #[rustfmt::skip] GameKilled,
     GameReload,
+    ResumeAudio,
 }
 
 #[derive(Debug)]
@@ -111,8 +112,8 @@ impl Player {
         SinglePlayerData {
             uuid: self.id,
             username: self.name.clone(),
-            points: self.points,
-            prev_points: self.points - self.guessed.unwrap_or(0),
+            points: self.points + self.guessed.unwrap_or(0),
+            prev_points: self.points,
             streak: self.streak,
             emoji: self.emoji.clone(),
             loaded: self.loaded,

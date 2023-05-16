@@ -31,7 +31,7 @@ fn gen_id() -> PlayerId {
     PlayerId(nanos_since_startup() as u64)
 }
 
-pub async fn get_server_browser(
+pub async fn get_server_browser_ws(
     axum::extract::State(state): axum::extract::State<std::sync::Arc<State>>,
     ws: axum::extract::WebSocketUpgrade,
 ) -> impl axum::response::IntoResponse {
@@ -340,7 +340,7 @@ pub async fn run_axum() {
     });
 
     let app = axum::Router::new()
-        .route("/server-browser", axum::routing::get(get_server_browser))
+        .route("/server-browser/ws", axum::routing::get(get_server_browser_ws))
         .route("/create-room.html", axum::routing::post(post_create_room))
         .route("/join/:room_id", axum::routing::get(get_join).post(post_join))
         .route("/room/:room_id", axum::routing::get(get_room).post(post_room))

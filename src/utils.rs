@@ -33,20 +33,20 @@ impl WebSocket {
         }
     }
 
-    /// Returns None when stream is closed
-    pub fn send(&self, msg: &impl serde::Serialize) -> Option<()> {
+    /// Returns Err(()) when stream is closed
+    pub fn send(&self, msg: &impl serde::Serialize) -> Result<(), ()> {
         use axum::extract::ws::Message;
         use futures::SinkExt as _;
 
         if *self.is_closed.lock() {
-            return None;
+            return Err(());
         }
 
         let msg = match serde_json::to_string(msg) {
             Ok(x) => Message::Text(x),
             Err(e) => {
                 log::warn!("failed to serialize websocket message: {}", e);
-                return Some(());
+                return Ok(());
             }
         };
 
@@ -58,22 +58,22 @@ impl WebSocket {
             }
         });
 
-        Some(())
+        Ok(())
     }
 
-    /// Returns None when stream is closed
-    pub async fn recv<T: serde::de::DeserializeOwned>(&self) -> Option<T> {
+    /// Returns Err(()) when stream is closed
+    pub async fn recv<T: serde::de::DeserializeOwned>(&self) -> Result<T, ()> {
         use axum::extract::ws::Message;
         use futures::StreamExt as _;
 
         loop {
             match self.recv.lock().await.next().await {
                 Some(Ok(Message::Text(text))) => match serde_json::from_str(&text) {
-                    Ok(x) => return Some(x),
+                    Ok(x) => return Ok(x),
                     Err(e) => log::warn!("failed to deserialize websocket message: {}", e),
                 },
                 // Mmh yes let's have 134513 states for the same thing
-                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return None,
+                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return Err(()),
                 Some(Ok(other)) => log::warn!("ignoring unexpected websocket message: {:?}", other),
             }
         }

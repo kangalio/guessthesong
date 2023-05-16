@@ -15,6 +15,8 @@ async fn finalize_round_and_kick_off_next_maybe(room: &parking_lot::Mutex<Room>)
                 p.streak = 0;
             }
         }
+        // Purge disconnected players
+        room.players.retain(|p| p.ws.lock().is_some());
 
         // Show scoreboard
         let song_title = &room.current_song.as_ref().unwrap().title;
@@ -195,10 +197,10 @@ pub async fn websocket_connect(
     tokio::time::sleep(std::time::Duration::from_millis(100)).await; // Hack to see traffic in firefox dev tools
 
     let room_state = {
-        let mut room = room_arc.lock();
+        let room = room_arc.lock();
 
-        if let Some(player) = room.players.iter_mut().find(|p| p.id == player_id) {
-            player.ws = Some(ws.clone());
+        if let Some(player) = room.players.iter().find(|p| p.id == player_id) {
+            *player.ws.lock() = Some(ws.clone());
         } else {
             log::warn!("no player with ID {} has joined!", player_id.0);
             return;
@@ -210,8 +212,9 @@ pub async fn websocket_connect(
             let room = room_arc.lock();
 
             // Notify newly joined player about all existing players
+            let new_player = room.players.iter().find(|p| p.id == player_id).unwrap();
             for player in &room.players {
-                ws.send(&SendEvent::Join {
+                new_player.send(&SendEvent::Join {
                     message: player.name.clone(),
                     payload: Box::new(room.player_state_msg()),
                 });
@@ -221,7 +224,7 @@ pub async fn websocket_connect(
             let (everyone_connected, song_provider) = {
                 let room = room_arc.lock();
 
-                (room.players.iter().all(|p| p.ws.is_some()), room.song_provider.clone())
+                (room.players.iter().all(|p| p.ws.lock().is_some()), room.song_provider.clone())
             };
 
             if everyone_connected {
@@ -236,19 +239,17 @@ pub async fn websocket_connect(
                 room.state = RoomState::WaitingForLoaded;
             }
         }
-        RoomState::WaitingForLoaded | RoomState::RoundStarted => {
-            let room = room_arc.lock();
+        RoomState::RoundStarted | RoomState::WaitingForLoaded => {
+            let mut room = room_arc.lock();
 
-            // room.send_all(&SendEvent::Join {
-            //     message: player.name.clone(),
-            //     payload: Box::new(room.player_state_msg()),
-            // });
             room.send_all(&room.player_state_msg());
             room.send_all(&SendEvent::ResumeAudio);
+            // Due to ResumeAudio, the client won't send a loaded confirmation
+            room.players.iter_mut().find(|p| p.id == player_id).unwrap().loaded = true;
         }
     }
 
-    while let Some(event) = ws.recv::<ReceiveEvent>().await {
+    while let Ok(event) = ws.recv::<ReceiveEvent>().await {
         websocket_event(&room_arc, player_id, event).await;
     }
 
@@ -257,7 +258,7 @@ pub async fn websocket_connect(
         let mut room = room_arc.lock();
 
         if let Some(player) = room.players.iter_mut().find(|p| p.id == player_id) {
-            player.ws = None;
+            *player.ws.lock() = None;
         }
     }
 }

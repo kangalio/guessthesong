@@ -85,7 +85,7 @@ pub enum SendEvent {
 pub struct Player {
     /// This must be an Arc to clone it out and avoid locking the room data while waiting for a
     /// receive event
-    pub ws: Option<std::sync::Arc<WebSocket>>,
+    pub ws: parking_lot::Mutex<Option<std::sync::Arc<WebSocket>>>,
     pub name: String,
     pub id: PlayerId,
     pub loaded: bool,
@@ -93,6 +93,18 @@ pub struct Player {
     pub streak: u32,
     pub points: u32,
     pub emoji: String,
+}
+
+impl Player {
+    /// Wraps WebSocket::send, marks player as disconnected if send fails
+    pub fn send(&self, msg: &SendEvent) {
+        let mut ws_maybe = self.ws.lock();
+        if let Some(ws) = &*ws_maybe {
+            if let Err(()) = ws.send(msg) {
+                *ws_maybe = None;
+            }
+        }
+    }
 }
 
 impl Player {
@@ -116,7 +128,7 @@ impl Player {
             emoji: self.emoji.clone(),
             loaded: self.loaded,
             guessed: self.guessed.is_some(),
-            disconnected: self.ws.is_none(),
+            disconnected: self.ws.lock().is_none(),
         }
     }
 }
@@ -154,9 +166,7 @@ pub struct Room {
 impl Room {
     pub fn send_all(&self, msg: &SendEvent) {
         for player in &self.players {
-            if let Some(ws) = &player.ws {
-                ws.send(msg);
-            }
+            player.send(msg);
         }
     }
 

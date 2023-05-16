@@ -39,7 +39,7 @@ pub async fn get_server_browser(
         let ws = WebSocket::new(ws);
 
         loop {
-            ws.send(&SendEvent::FetchNew {
+            if let Err(()) = ws.send(&SendEvent::FetchNew {
                 msg: state
                     .rooms
                     .lock()
@@ -62,7 +62,9 @@ pub async fn get_server_browser(
                         }
                     })
                     .collect(),
-            });
+            }) {
+                break;
+            }
 
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }
@@ -106,11 +108,12 @@ pub async fn post_join(
         points: 0,
         streak: 0,
         emoji: EMOJIS[cookies.get("emoji").unwrap().parse::<usize>().unwrap()].to_string(),
-        ws: None,
+        ws: parking_lot::Mutex::new(None),
     });
     let player = room.players.last().expect("impossible, we just pushed");
 
     // Notify existing players about this newly joined user
+    room.send_all(&room.player_state_msg());
     room.send_all(&SendEvent::Join {
         message: player.name.clone(),
         payload: Box::new(room.player_state_msg()),
@@ -151,7 +154,7 @@ pub async fn post_create_room(
         theme: "TODO".into(),
         song_provider: std::sync::Arc::new(SongProvider::from_any_url(&form.playlist).await),
         players: vec![Player {
-            ws: None,
+            ws: parking_lot::Mutex::new(None),
             name: form.username,
             id: player_id,
             loaded: false,

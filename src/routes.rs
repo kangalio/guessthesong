@@ -22,10 +22,9 @@ pub struct State {
 
 fn gen_id() -> PlayerId {
     fn nanos_since_startup() -> u128 {
-        thread_local! {
-            static START_TIME: std::time::Instant = std::time::Instant::now();
-        }
-        START_TIME.with(|&start_time| std::time::Instant::now() - start_time).as_nanos()
+        use once_cell::sync::Lazy;
+        static START_TIME: Lazy<std::time::Instant> = Lazy::new(|| std::time::Instant::now());
+        (std::time::Instant::now() - *START_TIME).as_nanos()
     }
 
     PlayerId(nanos_since_startup() as u64)

@@ -84,6 +84,24 @@ pub struct PostJoinForm {
     room_code: u32,
 }
 
+fn emoji_from_cookies(cookies: &axum::headers::Cookie) -> &'static str {
+    let inner = || -> Result<&'static str, &'static str> {
+        let emoji_index = cookies
+            .get("emoji")
+            .ok_or("missing cookie")?
+            .parse::<usize>()
+            .map_err(|_| "invalid number")?;
+        Ok(EMOJIS.get(emoji_index).ok_or("out of bounds")?)
+    };
+    match inner() {
+        Ok(emoji) => emoji,
+        Err(e) => {
+            log::warn!("couldn't get emoji from cookie: {}", e);
+            &EMOJIS[0]
+        }
+    }
+}
+
 pub async fn post_join(
     axum::extract::State(state): axum::extract::State<std::sync::Arc<State>>,
     axum::extract::TypedHeader(cookies): axum::extract::TypedHeader<axum::headers::Cookie>,
@@ -106,7 +124,7 @@ pub async fn post_join(
         guessed: None,
         points: 0,
         streak: 0,
-        emoji: EMOJIS[cookies.get("emoji").unwrap().parse::<usize>().unwrap()].to_string(),
+        emoji: emoji_from_cookies(&cookies).to_string(),
         ws: parking_lot::Mutex::new(None),
     });
     let player = room.players.last().expect("impossible, we just pushed");
@@ -151,7 +169,9 @@ pub async fn post_create_room(
         round_time_secs: form.round_time,
         created_at: std::time::Instant::now(),
         theme: "TODO".into(),
-        song_provider: std::sync::Arc::new(SongProvider::from_any_url(&form.playlist).await),
+        song_provider: std::sync::Arc::new(
+            SongProvider::from_any_url(&form.playlist).await.unwrap(),
+        ),
         players: vec![Player {
             ws: parking_lot::Mutex::new(None),
             name: form.username,
@@ -160,7 +180,7 @@ pub async fn post_create_room(
             guessed: None,
             streak: 0,
             points: 0,
-            emoji: EMOJIS[cookies.get("emoji").unwrap().parse::<usize>().unwrap()].to_string(),
+            emoji: emoji_from_cookies(&cookies).to_string(),
         }],
         state: RoomState::Lobby,
         current_round: 0,
@@ -308,7 +328,7 @@ pub async fn run_axum() {
                 state: RoomState::Lobby,
                 round_task: None,
                 song_provider: std::sync::Arc::new(
-                    SongProvider::from_spotify_playlist("5wWUVh8qv6YygjbNZCckFl").await,
+                    SongProvider::from_spotify_playlist("5wWUVh8qv6YygjbNZCckFl").await.unwrap(),
                 ),
                 theme: "Random Songs".into(),
                 current_song: None,

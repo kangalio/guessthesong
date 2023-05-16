@@ -13,8 +13,9 @@ struct YtdlpPlaylistEntry {
 }
 
 fn sanitize_spotify_title(title: &str) -> String {
-    static REGEX: once_cell::sync::Lazy<regex::Regex> =
-        once_cell::sync::Lazy::new(|| regex::Regex::new(r"( \(.*\))?( - .*)?$").unwrap());
+    static REGEX: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+        regex::Regex::new(r"( \(.*\))?( - .*)?$").expect("impossible")
+    });
 
     let Some(match_) = REGEX.find(title) else { return title.to_string() };
     title[..match_.start()].to_string()
@@ -92,31 +93,32 @@ impl SongProvider {
         }
     }
 
-    pub async fn from_any_url(url: &str) -> Self {
+    pub async fn from_any_url(url: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         use once_cell::sync::Lazy;
         static SPOTIFY_URL_REGEX: Lazy<regex::Regex> =
-            Lazy::new(|| regex::Regex::new("spotify.com/playlist/([^?/]+)").unwrap());
+            Lazy::new(|| regex::Regex::new("spotify.com/playlist/([^?/]+)").expect("impossible"));
         if let Some(captures) = SPOTIFY_URL_REGEX.captures(url) {
-            let playlist_id = captures.get(1).unwrap().as_str();
-            return Self::from_spotify_playlist(playlist_id).await;
+            let playlist_id = captures.get(1).expect("impossible").as_str();
+            return Ok(Self::from_spotify_playlist(playlist_id).await?);
         }
         if url.contains("youtube.com") {
-            return Self::from_youtube_playlist(url).await;
+            return Ok(Self::from_youtube_playlist(url).await?);
         }
-        panic!("invalid URL: {}", url);
+        Err(format!("invalid URL: {}", url).into())
     }
 
-    pub async fn from_spotify_playlist(playlist_id: &str) -> Self {
+    pub async fn from_spotify_playlist(
+        playlist_id: &str,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let spotify = rspotify::ClientCredsSpotify::new(rspotify::Credentials {
             id: "0536121d4660414d9cc90962834cd390".into(),
             secret: Some("8a0f2d3327b749e39b9c50ed3deb218f".into()),
         });
-        spotify.request_token().await.unwrap();
+        spotify.request_token().await?;
 
         let playlist = spotify
-            .playlist(rspotify::model::PlaylistId::from_id(playlist_id).unwrap(), None, None)
-            .await
-            .unwrap();
+            .playlist(rspotify::model::PlaylistId::from_id(playlist_id)?, None, None)
+            .await?;
         let playlist = playlist
             .tracks
             .items
@@ -127,22 +129,24 @@ impl SongProvider {
             })
             .collect();
 
-        Self::new(Playlist::Spotify(playlist))
+        Ok(Self::new(Playlist::Spotify(playlist)))
     }
 
-    pub async fn from_youtube_playlist(url: &str) -> Self {
+    pub async fn from_youtube_playlist(
+        url: &str,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let output = tokio::process::Command::new("yt-dlp")
             .arg("--dump-json")
             .arg("--flat-playlist")
             .arg(url)
             .output()
-            .await
-            .unwrap();
+            .await?;
         let output = String::from_utf8_lossy(&output.stdout);
 
-        let playlist = output.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        let playlist =
+            output.lines().map(|line| serde_json::from_str(line)).collect::<Result<_, _>>()?;
 
-        Self::new(Playlist::Youtube(playlist))
+        Ok(Self::new(Playlist::Youtube(playlist)))
     }
 
     pub async fn next(&self) -> Song {
@@ -150,6 +154,6 @@ impl SongProvider {
             &mut *self.background_downloader.lock(),
             download_random_song_in_background(&self.playlist),
         );
-        background_downloader.await.unwrap()
+        background_downloader.await.expect("downloader panicked or was cancelled?")
     }
 }

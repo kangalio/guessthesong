@@ -2,11 +2,28 @@ use crate::hints::*;
 use crate::structs::*;
 use crate::utils::*;
 
-/// Notifies clients about a new round and sets the room in waiting mode so that a round is
-/// started once everyone downloaded the new song
-async fn advance_round(room: &parking_lot::Mutex<Room>) {
+async fn finalize_round_and_kick_off_next_maybe(room: &parking_lot::Mutex<Room>) {
     let song_provider = {
         let mut room = room.lock();
+
+        // Add up points and streak
+        for p in &mut room.players {
+            if let Some(new_points) = p.guessed {
+                p.points += new_points;
+                p.streak += 1;
+            } else {
+                p.streak = 0;
+            }
+        }
+
+        // Show scoreboard
+        let song_title = &room.current_song.as_ref().unwrap().title;
+        room.send_all(&SendEvent::Notify { message: format!("The song was: {}", song_title) });
+        room.send_all(&SendEvent::Scoreboard {
+            round: room.current_round + 1,
+            max_rounds: room.num_rounds,
+            payload: room.players.iter().map(|p| p.to_scoreboard_player()).collect(),
+        });
 
         // Advance round, stop if this was the last round
         room.current_round += 1;
@@ -19,26 +36,20 @@ async fn advance_round(room: &parking_lot::Mutex<Room>) {
         room.song_provider.clone()
     };
     let new_song = song_provider.next().await;
+    {
+        let mut room = room.lock();
 
-    let mut room = room.lock();
+        // Reset fields for next round
+        room.current_song = Some(new_song);
+        for p in &mut room.players {
+            p.guessed = None;
+            p.loaded = false;
+        }
 
-    room.current_song = Some(new_song);
-    for p in &mut room.players {
-        p.guessed = None;
-        p.loaded = false;
+        // Set in waiting mode to start the game once everyone loaded the song
+        room.send_all(&SendEvent::NewTurn);
+        room.state = RoomState::WaitingForLoaded;
     }
-    room.send_all(&SendEvent::NewTurn);
-    room.state = RoomState::WaitingForLoaded;
-}
-
-fn show_scoreboard(room: &Room) {
-    let song_title = &room.current_song.as_ref().unwrap().title;
-    room.send_all(&SendEvent::Notify { message: format!("The song was: {}", song_title) });
-    room.send_all(&SendEvent::Scoreboard {
-        round: room.current_round + 1,
-        max_rounds: room.num_rounds,
-        payload: room.players.iter().map(|p| p.to_scoreboard_player()).collect(),
-    });
 }
 
 async fn play_round(room: &parking_lot::Mutex<Room>) {
@@ -78,23 +89,7 @@ async fn play_round(room: &parking_lot::Mutex<Room>) {
         }
     }
 
-    {
-        let mut room = room.lock();
-
-        // Add up points and streak
-        for p in &mut room.players {
-            if let Some(new_points) = p.guessed {
-                p.points += new_points;
-                p.streak += 1;
-            } else {
-                p.streak = 0;
-            }
-        }
-
-        show_scoreboard(&room);
-    }
-
-    advance_round(room).await;
+    finalize_round_and_kick_off_next_maybe(room).await;
 }
 
 fn points_for_guessing_now(room: &Room) -> u32 {
@@ -139,7 +134,10 @@ async fn websocket_event(
                 if msg.to_lowercase() == current_song.title.to_lowercase() {
                     room.players.iter_mut().find(|p| p.id == player_id).unwrap().guessed =
                         Some(points_for_guessing_now(&room));
+
+                    // Make the user icon light up green
                     room.send_all(&room.player_state_msg());
+
                     return;
                 }
             }
@@ -176,13 +174,8 @@ async fn websocket_event(
             room.send_all(&SendEvent::PlayerTyping { uuid: player_id, typing });
         }
         ReceiveEvent::SkipRound => {
-            {
-                let mut room = room_arc.lock();
-
-                room.round_task = None; // aborts round task
-                show_scoreboard(&room);
-            }
-            advance_round(&room_arc).await;
+            room_arc.lock().round_task = None; // aborts round task
+            finalize_round_and_kick_off_next_maybe(&room_arc).await;
         }
         ReceiveEvent::StopGame => {
             let mut room = room_arc.lock();

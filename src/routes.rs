@@ -79,7 +79,7 @@ pub async fn get_join(
     ))
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, serde::Deserialize)]
 pub struct PostJoinForm {
     username: String,
     room_code: u32,
@@ -108,6 +108,8 @@ pub async fn post_join(
     axum::extract::TypedHeader(cookies): axum::extract::TypedHeader<axum::headers::Cookie>,
     axum::extract::Form(form): axum::extract::Form<PostJoinForm>,
 ) -> Result<impl axum::response::IntoResponse, axum::response::ErrorResponse> {
+    log::info!("Room joined: {:?}", form);
+
     let PostJoinForm { username, room_code } = form;
     let player_id = gen_id();
     let room = state
@@ -146,7 +148,7 @@ pub async fn post_join(
     ))
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, serde::Deserialize)]
 pub struct CreateRoomForm {
     username: String,
     room_name: String,
@@ -161,6 +163,8 @@ pub async fn post_create_room(
     axum::extract::TypedHeader(cookies): axum::extract::TypedHeader<axum::headers::Cookie>,
     axum::extract::Form(form): axum::extract::Form<CreateRoomForm>,
 ) -> Result<impl axum::response::IntoResponse, axum::response::ErrorResponse> {
+    log::info!("Room created: {:?}", form);
+
     let player_id = gen_id();
 
     let new_room = Room {
@@ -233,6 +237,7 @@ fn get_or_post_room(
     }
 
     if let Some(RoomSettings { room_name, rounds, round_time }) = apply_settings {
+        log::info!("User {} changed settings for room {}", player_id.0, room_id);
         room.name = room_name;
         room.num_rounds = rounds;
         room.round_time_secs = round_time;
@@ -278,6 +283,7 @@ pub async fn get_room_ws(
 ) -> impl axum::response::IntoResponse {
     let player_id = PlayerId(cookies.get("user").unwrap().parse().unwrap());
     let room = state.rooms.lock().get(&room_id).unwrap().clone();
+    log::info!("User {} connected via websocket to room {}", player_id.0, room_id);
 
     ws.on_upgrade(move |ws| async move {
         websocket_connect(room, player_id, std::sync::Arc::new(WebSocket::new(ws))).await;
@@ -349,8 +355,7 @@ pub async fn run_axum() {
         .fallback(fallback)
         .with_state(state);
 
-    axum::Server::bind(&std::net::SocketAddr::from(([0, 0, 0, 0], 8787)))
-        .serve(app.into_make_service())
-        .await
-        .unwrap();
+    let address = std::net::SocketAddr::from(([0, 0, 0, 0], 8787));
+    log::info!("Running HTTP server at http://{:?}", address);
+    axum::Server::bind(&address).serve(app.into_make_service()).await.unwrap();
 }

@@ -21,14 +21,14 @@ fn sanitize_spotify_title(title: &str) -> String {
     title[..match_.start()].to_string()
 }
 
-enum Playlist {
+enum Tracks {
     Spotify(Vec<rspotify::model::FullTrack>),
     Youtube(Vec<YtdlpPlaylistEntry>),
 }
 
-fn download_random_song_in_background(playlist: &Playlist) -> tokio::task::JoinHandle<Song> {
+fn download_random_song_in_background(playlist: &Tracks) -> tokio::task::JoinHandle<Song> {
     match &playlist {
-        Playlist::Spotify(tracks) => {
+        Tracks::Spotify(tracks) => {
             let track = &tracks[fastrand::usize(0..tracks.len())];
             let title = track.name.clone();
 
@@ -60,7 +60,7 @@ fn download_random_song_in_background(playlist: &Playlist) -> tokio::task::JoinH
                 Song { title: sanitize_spotify_title(&title), audio: output.stdout }
             })
         }
-        Playlist::Youtube(playlist) => {
+        Tracks::Youtube(playlist) => {
             let song = playlist[fastrand::usize(0..playlist.len())].clone();
 
             tokio::spawn(async move {
@@ -79,18 +79,24 @@ fn download_random_song_in_background(playlist: &Playlist) -> tokio::task::JoinH
 }
 
 pub struct SongProvider {
-    playlist: Playlist,
+    tracks: Tracks,
+    playlist_name: String,
     background_downloader: parking_lot::Mutex<tokio::task::JoinHandle<Song>>,
 }
 
 impl SongProvider {
-    fn new(playlist: Playlist) -> Self {
+    fn new(tracks: Tracks, playlist_name: String) -> Self {
         Self {
             background_downloader: parking_lot::Mutex::new(download_random_song_in_background(
-                &playlist,
+                &tracks,
             )),
-            playlist,
+            tracks,
+            playlist_name,
         }
+    }
+
+    pub fn playlist_name(&self) -> &str {
+        &self.playlist_name
     }
 
     pub async fn from_any_url(url: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
@@ -119,7 +125,7 @@ impl SongProvider {
         let playlist = spotify
             .playlist(rspotify::model::PlaylistId::from_id(playlist_id)?, None, None)
             .await?;
-        let playlist = playlist
+        let tracks = playlist
             .tracks
             .items
             .into_iter()
@@ -129,7 +135,7 @@ impl SongProvider {
             })
             .collect();
 
-        Ok(Self::new(Playlist::Spotify(playlist)))
+        Ok(Self::new(Tracks::Spotify(tracks), playlist.name))
     }
 
     pub async fn from_youtube_playlist(
@@ -143,16 +149,16 @@ impl SongProvider {
             .await?;
         let output = String::from_utf8_lossy(&output.stdout);
 
-        let playlist =
+        let tracks =
             output.lines().map(|line| serde_json::from_str(line)).collect::<Result<_, _>>()?;
 
-        Ok(Self::new(Playlist::Youtube(playlist)))
+        Ok(Self::new(Tracks::Youtube(tracks), "<YouTube playlist>".into()))
     }
 
     pub async fn next(&self) -> Song {
         let background_downloader = std::mem::replace(
             &mut *self.background_downloader.lock(),
-            download_random_song_in_background(&self.playlist),
+            download_random_song_in_background(&self.tracks),
         );
         background_downloader.await.expect("downloader panicked or was cancelled?")
     }

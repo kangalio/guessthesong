@@ -167,16 +167,16 @@ pub async fn post_create_room(
 
     let player_id = gen_id();
 
+    let song_provider = SongProvider::from_any_url(&form.playlist).await.unwrap();
+
     let new_room = Room {
         name: form.room_name,
         password: if form.password.is_empty() { None } else { Some(form.password) },
         num_rounds: form.rounds,
         round_time_secs: form.round_time,
         created_at: std::time::Instant::now(),
-        theme: "TODO".into(),
-        song_provider: std::sync::Arc::new(
-            SongProvider::from_any_url(&form.playlist).await.unwrap(),
-        ),
+        theme: song_provider.playlist_name().into(),
+        song_provider: std::sync::Arc::new(song_provider),
         players: vec![Player {
             ws: parking_lot::Mutex::new(None),
             name: form.username,

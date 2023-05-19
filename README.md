@@ -29,6 +29,7 @@ The list of not yet implemented features is much larger.
 # How to run
 
 1. [Create a Spotify developer application](https://developer.spotify.com/dashboard/create)
-1. Find the Client ID and Client Secret and enter them into .env (overwrite the old values)
+1. Find the Client ID and Client Secret values
+1. Copy .env.example to .env and overwrite the credentials
 1. [Install the Rust programming language](https://www.rust-lang.org/tools/install)
 1. Run this Rust project like normal: `cargo run` in the terminal

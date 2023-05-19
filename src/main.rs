@@ -5,6 +5,7 @@ mod routes;
 mod song_provider;
 mod utils;
 mod ws_structs;
+mod spotify_playlist;
 
 #[tokio::main]
 async fn main() {

@@ -58,7 +58,7 @@ pub async fn get_server_browser_ws(
                             } else {
                                 ListedRoomState::Public
                             },
-                            theme: room.theme.clone(),
+                            theme: room.song_provider.playlist_name().into(),
                             game_mode: "Themes".into(), // is this ever something else?
                         }
                     })
@@ -177,7 +177,6 @@ pub async fn post_create_room(
         num_rounds: form.rounds,
         round_time_secs: form.round_time,
         created_at: std::time::Instant::now(),
-        theme: song_provider.playlist_name().into(),
         song_provider: std::sync::Arc::new(song_provider),
         players: vec![Player {
             ws: parking_lot::Mutex::new(None),
@@ -345,7 +344,6 @@ pub async fn run_axum(spotify_client: rspotify::ClientCredsSpotify) {
                     .await
                     .unwrap(),
                 ),
-                theme: "Random Songs".into(),
                 current_song: None,
                 round_start_time: None,
                 current_round: 0,

@@ -70,7 +70,6 @@ pub struct Room {
     pub num_rounds: u32,
     pub round_time_secs: u32,
     pub created_at: std::time::Instant,
-    pub theme: String,
 
     // Dynamic data, always present
     pub song_provider: std::sync::Arc<SongProvider>,

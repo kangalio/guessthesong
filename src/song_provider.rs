@@ -92,13 +92,16 @@ impl SongProvider {
         }
     }
 
-    pub async fn from_any_url(url: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn from_any_url(
+        client: std::sync::Arc<rspotify::ClientCredsSpotify>,
+        url: &str,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         use once_cell::sync::Lazy;
         static SPOTIFY_URL_REGEX: Lazy<regex::Regex> =
             Lazy::new(|| regex::Regex::new("spotify.com/playlist/([^?/]+)").expect("impossible"));
         if let Some(captures) = SPOTIFY_URL_REGEX.captures(url) {
             let playlist_id = captures.get(1).expect("impossible").as_str();
-            return Ok(Self::from_spotify_playlist(playlist_id).await?);
+            return Ok(Self::from_spotify_playlist(client, playlist_id).await?);
         }
         if url.contains("youtube.com") {
             return Ok(Self::from_youtube_playlist(url).await?);
@@ -107,10 +110,12 @@ impl SongProvider {
     }
 
     pub async fn from_spotify_playlist(
+        client: std::sync::Arc<rspotify::ClientCredsSpotify>,
         playlist_id: &str,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         Ok(Self::new(Playlist::Spotify(
-            SpotifyPlaylist::new(rspotify::model::PlaylistId::from_id(playlist_id)?).await?,
+            SpotifyPlaylist::new(client, rspotify::model::PlaylistId::from_id(playlist_id)?)
+                .await?,
         )))
     }
 

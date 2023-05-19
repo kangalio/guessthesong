@@ -19,6 +19,7 @@ pub struct State {
     rooms: parking_lot::Mutex<
         std::collections::HashMap<u32, std::sync::Arc<parking_lot::Mutex<Room>>>,
     >,
+    spotify_client: std::sync::Arc<rspotify::ClientCredsSpotify>,
 }
 
 fn gen_id() -> PlayerId {
@@ -167,7 +168,8 @@ pub async fn post_create_room(
 
     let player_id = gen_id();
 
-    let song_provider = SongProvider::from_any_url(&form.playlist).await.unwrap();
+    let song_provider =
+        SongProvider::from_any_url(state.spotify_client.clone(), &form.playlist).await.unwrap();
 
     let new_room = Room {
         name: form.room_name,
@@ -321,7 +323,8 @@ pub async fn fallback(uri: axum::http::Uri) -> impl axum::response::IntoResponse
     Err(axum::response::Redirect::to(&format!("https://guessthesong.io{}", uri.path())))
 }
 
-pub async fn run_axum() {
+pub async fn run_axum(spotify_client: rspotify::ClientCredsSpotify) {
+    let spotify_client = std::sync::Arc::new(spotify_client);
     let state = std::sync::Arc::new(State {
         rooms: parking_lot::Mutex::new(From::from([(
             420,
@@ -335,7 +338,12 @@ pub async fn run_axum() {
                 state: RoomState::Lobby,
                 round_task: None,
                 song_provider: std::sync::Arc::new(
-                    SongProvider::from_spotify_playlist("5wWUVh8qv6YygjbNZCckFl").await.unwrap(),
+                    SongProvider::from_spotify_playlist(
+                        spotify_client.clone(),
+                        "5wWUVh8qv6YygjbNZCckFl",
+                    )
+                    .await
+                    .unwrap(),
                 ),
                 theme: "Random Songs".into(),
                 current_song: None,
@@ -343,6 +351,7 @@ pub async fn run_axum() {
                 current_round: 0,
             })),
         )])),
+        spotify_client,
     });
 
     let app = axum::Router::new()

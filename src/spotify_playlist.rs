@@ -10,19 +10,16 @@ fn insert_page(
 }
 
 pub struct SpotifyPlaylist {
-    client: rspotify::ClientCredsSpotify,
+    client: std::sync::Arc<rspotify::ClientCredsSpotify>,
     data: rspotify::model::FullPlaylist,
     tracks: parking_lot::Mutex<Vec<Option<rspotify::model::PlayableItem>>>,
 }
 
 impl SpotifyPlaylist {
-    pub async fn new(id: rspotify::model::PlaylistId<'_>) -> Result<Self, rspotify::ClientError> {
-        let client = rspotify::ClientCredsSpotify::new(rspotify::Credentials {
-            id: "0536121d4660414d9cc90962834cd390".into(),
-            secret: Some("8a0f2d3327b749e39b9c50ed3deb218f".into()),
-        });
-        client.request_token().await?;
-
+    pub async fn new(
+        client: std::sync::Arc<rspotify::ClientCredsSpotify>,
+        id: rspotify::model::PlaylistId<'_>,
+    ) -> Result<Self, rspotify::ClientError> {
         let mut data = client.playlist(id, None, None).await?;
 
         let mut tracks = vec![None; data.tracks.total as usize];
@@ -49,11 +46,10 @@ impl SpotifyPlaylist {
         let subset_start = index / 50 * 50;
         let subset_length = 50; // Spotify API's maximum
         log::info!(
-            "needing track {} requesting tracks {}..{} from {}",
+            "index {}, requesting {}..{}",
             index,
             subset_start,
             subset_start + subset_length,
-            self.data.id
         );
         let page = self
             .client

@@ -32,14 +32,20 @@ impl SpotifyPlaylist {
         &self.data.name
     }
 
-    pub async fn random_item(&self) -> rspotify::model::PlayableItem {
-        let index;
+    pub fn len(&self) -> usize {
+        self.tracks.lock().len()
+    }
+
+    pub async fn track(&self, index: usize) -> Option<rspotify::model::PlayableItem> {
         {
             let tracks = self.tracks.lock();
-            index = fastrand::usize(..tracks.len());
+            if index >= tracks.len() {
+                return None;
+            }
+
             if let Some(track) = &tracks[index] {
                 log::info!("index {} is already cached, nice", index);
-                return track.clone();
+                return Some(track.clone());
             }
         }
 
@@ -66,7 +72,7 @@ impl SpotifyPlaylist {
         {
             let mut tracks = self.tracks.lock();
             insert_page(&mut tracks, page);
-            tracks[index].clone().expect("we just inserted")
+            Some(tracks[index].clone().expect("we just inserted"))
         }
     }
 }

@@ -21,15 +21,28 @@ fn sanitize_spotify_title(title: &str) -> String {
     title[..match_.start()].to_string()
 }
 
-enum Playlist {
-    Spotify(SpotifyPlaylist),
+enum PlaylistSource {
+    Spotify { playlist: SpotifyPlaylist, indices_not_played_yet: parking_lot::Mutex<Vec<usize>> },
     Youtube { tracks: Vec<YtdlpPlaylistEntry> },
 }
 
-async fn download_random_song(playlist: &Playlist) -> Song {
-    match &playlist {
-        Playlist::Spotify(playlist) => {
-            let (artists, title) = match playlist.random_item().await {
+async fn download_random_song(playlist: &PlaylistSource) -> Song {
+    match playlist {
+        PlaylistSource::Spotify { playlist, indices_not_played_yet } => {
+            // Select random track
+            let track_index = {
+                let mut indices_not_played_yet = indices_not_played_yet.lock();
+                if indices_not_played_yet.is_empty() {
+                    log::info!("dang either the playlist is tiny or the lobby runs very long");
+                    *indices_not_played_yet = (0..playlist.len()).collect();
+                }
+                let x = fastrand::usize(..indices_not_played_yet.len());
+                indices_not_played_yet.remove(x)
+            };
+            let track = playlist.track(track_index).await.expect("index cant be out of bounds");
+
+            // Build youtube search query
+            let (artists, title) = match track {
                 rspotify::model::PlayableItem::Track(track) => (
                     track.artists.iter().map(|x| &*x.name).collect::<Vec<_>>().join(", "),
                     track.name,
@@ -39,6 +52,7 @@ async fn download_random_song(playlist: &Playlist) -> Song {
                 }
             };
 
+            // Download song from youtube
             let output = tokio::process::Command::new("yt-dlp")
                 .arg("-x")
                 .args(["-o", "-"])
@@ -52,7 +66,7 @@ async fn download_random_song(playlist: &Playlist) -> Song {
 
             Song { title: sanitize_spotify_title(&title), audio: output.stdout }
         }
-        Playlist::Youtube { tracks } => {
+        PlaylistSource::Youtube { tracks } => {
             let song = tracks[fastrand::usize(0..tracks.len())].clone();
 
             let output = tokio::process::Command::new("yt-dlp")
@@ -69,12 +83,12 @@ async fn download_random_song(playlist: &Playlist) -> Song {
 }
 
 pub struct SongProvider {
-    playlist: std::sync::Arc<Playlist>,
+    playlist: std::sync::Arc<PlaylistSource>,
     background_downloader: parking_lot::Mutex<tokio::task::JoinHandle<Song>>,
 }
 
 impl SongProvider {
-    fn new(playlist: Playlist) -> Self {
+    fn new(playlist: PlaylistSource) -> Self {
         let playlist = std::sync::Arc::new(playlist);
         let playlist2 = playlist.clone();
         Self {
@@ -87,8 +101,8 @@ impl SongProvider {
 
     pub fn playlist_name(&self) -> &str {
         match &*self.playlist {
-            Playlist::Spotify(playlist) => playlist.name(),
-            Playlist::Youtube { tracks: _ } => "[not implemented]",
+            PlaylistSource::Spotify { playlist, .. } => playlist.name(),
+            PlaylistSource::Youtube { tracks: _ } => "[not implemented]",
         }
     }
 
@@ -113,10 +127,13 @@ impl SongProvider {
         client: std::sync::Arc<rspotify::ClientCredsSpotify>,
         playlist_id: &str,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(Self::new(Playlist::Spotify(
+        let playlist =
             SpotifyPlaylist::new(client, rspotify::model::PlaylistId::from_id(playlist_id)?)
-                .await?,
-        )))
+                .await?;
+        Ok(Self::new(PlaylistSource::Spotify {
+            indices_not_played_yet: parking_lot::Mutex::new((0..playlist.len()).collect()),
+            playlist,
+        }))
     }
 
     pub async fn from_youtube_playlist(
@@ -133,7 +150,7 @@ impl SongProvider {
         let tracks =
             output.lines().map(|line| serde_json::from_str(line)).collect::<Result<_, _>>()?;
 
-        Ok(Self::new(Playlist::Youtube { tracks }))
+        Ok(Self::new(PlaylistSource::Youtube { tracks }))
     }
 
     pub async fn next(&self) -> Song {

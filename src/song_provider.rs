@@ -15,11 +15,46 @@ struct YtdlpPlaylistEntry {
 
 fn sanitize_spotify_title(title: &str) -> String {
     static REGEX: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
-        regex::Regex::new(r"( \(.*\))?( - .*)?$").expect("impossible")
+        regex::Regex::new(r"( \(.*\))?( \[.*\])?( - .*)?$").expect("impossible")
     });
 
     let Some(match_) = REGEX.find(title) else { return title.to_string() };
     title[..match_.start()].to_string()
+}
+
+#[cfg(test)]
+#[test]
+fn test_sanitize_spotify_title() {
+    use sanitize_spotify_title as s;
+
+    // First batch I used for the initial impl
+    assert_eq!(s(r#"21 Reasons (feat. Ella Henderson)"#), "21 Reasons");
+    assert_eq!(s(r#"Around the World (La La La La La) - Radio Version"#), "Around the World");
+    assert_eq!(s(r#"Geordie - Radio"#), "Geordie");
+    assert_eq!(s(r#"Funkytown - Single Version"#), "Funkytown");
+    assert_eq!(s(r#"Jump - 2015 Remaster"#), "Jump");
+    assert_eq!(s(r#"You Spin Me Round (Like a Record)"#), "You Spin Me Round");
+    assert_eq!(s(r#"Start Me Up - Remastered 2009"#), "Start Me Up");
+    assert_eq!(s(r#"Jump (Original Mix)"#), "Jump");
+    assert_eq!(s(r#"Lambada - Original Radio Edit"#), "Lambada");
+    assert_eq!(s(r#"Rock with You - Single Version"#), "Rock with You");
+    assert_eq!(s(r#"Wonderwall - Remastered"#), "Wonderwall");
+    assert_eq!(s(r#"Blue (Da Ba Dee)"#), "Blue");
+    assert_eq!(s(r#"Blue (Da Ba Dee) - Gabry Ponte Ice Pop Radio"#), "Blue");
+    assert_eq!(s(r#"My Heart Will Go On - Love Theme from "Titanic""#), "My Heart Will Go On");
+    assert_eq!(s(r#"What Is Love - 7" Mix"#), "What Is Love");
+    assert_eq!(s(r#"Everybody (Backstreet's Back) - Radio Edit"#), "Everybody");
+    assert_eq!(s(r#"Mr. Vain - Original Radio Edit"#), "Mr. Vain");
+    assert_eq!(s(r#"Ecuador - Original Radio Edit"#), "Ecuador");
+    assert_eq!(s(r#"I'm Outta Love - Radio Edit"#), "I'm Outta Love");
+    assert_eq!(s(r#"Saturday Night - Radio Mix"#), "Saturday Night");
+    assert_eq!(s(r#"9Pm (Till I Come)"#), "9Pm");
+    assert_eq!(s(r#"Men In Black - From "Men In Black" Soundtrack"#), "Men In Black");
+
+    assert_eq!(
+        s(r#"Du Hast Den Farbfilm Vergessen (Radio Edit) [feat. Stephanie Kurpisch]"#),
+        "Du Hast Den Farbfilm Vergessen"
+    );
 }
 
 enum PlaylistSource {

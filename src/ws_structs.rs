@@ -16,6 +16,7 @@ pub enum ReceiveEvent {
     TypingStatus { typing: bool },
     SkipRound,
     StopGame,
+    EmoteReaction { reaction: u32 },
 }
 
 #[derive(serde::Serialize)]
@@ -76,4 +77,5 @@ pub enum SendEvent {
     #[serde(rename = "game-killed")] #[rustfmt::skip] GameKilled,
     GameReload,
     ResumeAudio,
+    #[serde(rename = "emoteReaction")] #[rustfmt::skip] EmoteReaction { uuid: PlayerId, reaction: char },
 }

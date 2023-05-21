@@ -208,6 +208,18 @@ async fn websocket_event(
             room.send_all(&SendEvent::GameKilled);
             room.send_all(&SendEvent::GameReload);
         }
+        ReceiveEvent::EmoteReaction { reaction } => {
+            let room = room_arc.lock();
+
+            let reaction = match reaction {
+                0 => '👍',
+                1 => '👎',
+                2 => '🙌',
+                3 => '🤘',
+                _ => '❓',
+            };
+            room.send_all(&SendEvent::EmoteReaction { uuid: player_id, reaction })
+        }
     }
 }
 

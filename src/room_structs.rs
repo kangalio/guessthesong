@@ -75,6 +75,7 @@ pub struct Room {
     pub song_provider: std::sync::Arc<SongProvider>,
     pub players: Vec<Player>,
     pub state: RoomState,
+    pub empty_last_time_we_checked: bool,
 
     // Dynamic data, only while playing
     pub current_round: u32, // zero-indexed

@@ -193,6 +193,7 @@ pub async fn post_create_room(
         round_task: None,
         current_song: None,
         round_start_time: None,
+        empty_last_time_we_checked: false,
     };
 
     let mut rooms = state.rooms.lock();
@@ -347,6 +348,7 @@ pub async fn run_axum(spotify_client: rspotify::ClientCredsSpotify) {
                 current_song: None,
                 round_start_time: None,
                 current_round: 0,
+                empty_last_time_we_checked: false,
             })),
         )])),
         spotify_client,
@@ -354,10 +356,22 @@ pub async fn run_axum(spotify_client: rspotify::ClientCredsSpotify) {
 
     let state2 = state.clone();
     let _empty_room_purger = spawn_attached(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
         loop {
-            state2.rooms.lock().retain(|_id, room| room.lock().players.len() > 0);
-            interval.tick().await;
+            // To make sure we don't accidentally close a room in-between POST join and connect WS
+            // due to bad timing. Also, the starter room shouldn't close immediately lol
+            state2.rooms.lock().retain(|id, room| {
+                let mut room = room.lock();
+
+                if room.players.is_empty() && room.empty_last_time_we_checked {
+                    log::info!("Purging room {} (empty for two checks in a row)", id);
+                    return false;
+                }
+
+                room.empty_last_time_we_checked = room.players.is_empty();
+                true
+            });
+
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         }
     });
 

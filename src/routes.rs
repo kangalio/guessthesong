@@ -249,6 +249,7 @@ fn get_or_post_room(
         RoomState::Lobby => std::fs::read_to_string("frontend/roomLOBBY.html")
             .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
             .replace("ROOMID", &room_id.to_string())
+            .replace("ROOMNAME", &room.name)
             .replace("PLAYERID", &player_id.0.to_string()),
         RoomState::WaitingForLoaded | RoomState::WaitingForReconnect | RoomState::RoundStarted => {
             std::fs::read_to_string("frontend/roomPLAY.html")

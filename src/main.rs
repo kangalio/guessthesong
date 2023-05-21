@@ -6,6 +6,7 @@ mod song_provider;
 mod spotify_playlist;
 mod utils;
 mod ws_structs;
+mod ytdlp_download;
 
 #[tokio::main]
 async fn main() {

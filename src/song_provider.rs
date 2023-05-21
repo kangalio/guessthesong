@@ -1,4 +1,5 @@
 use crate::spotify_playlist::*;
+use crate::ytdlp_download::*;
 
 #[derive(Clone)]
 pub struct Song {
@@ -42,42 +43,24 @@ async fn download_random_song(playlist: &PlaylistSource) -> Song {
             let track = playlist.track(track_index).await.expect("index cant be out of bounds");
 
             // Build youtube search query
-            let (artists, title) = match track {
-                rspotify::model::PlayableItem::Track(track) => (
-                    track.artists.iter().map(|x| &*x.name).collect::<Vec<_>>().join(", "),
-                    track.name,
-                ),
+            let (artists, title) = match &track {
+                rspotify::model::PlayableItem::Track(track) => {
+                    (track.artists.iter().map(|x| &*x.name).collect::<Vec<_>>(), &*track.name)
+                }
                 rspotify::model::PlayableItem::Episode(episode) => {
-                    (episode.show.publisher, episode.name)
+                    (vec![&*episode.show.publisher], &*episode.name)
                 }
             };
 
-            // Download song from youtube
-            let output = tokio::process::Command::new("yt-dlp")
-                .arg("-x")
-                .args(["-o", "-"])
-                .args(["--playlist-end", "1"])
-                // https://www.reddit.com/r/youtubedl/wiki/howdoidownloadpartsofavideo/
-                .args(["--download-sections", "*0-100"]) // 75s plus a few extra secs
-                .arg(format!("https://music.youtube.com/search?q={artists} - {title}"))
-                .output()
-                .await
-                .unwrap();
-
-            Song { title: sanitize_spotify_title(&title), audio: output.stdout }
+            Song {
+                title: sanitize_spotify_title(&title),
+                audio: download_best_effort(&artists, &title).await,
+            }
         }
         PlaylistSource::Youtube { tracks } => {
             let song = tracks[fastrand::usize(0..tracks.len())].clone();
 
-            let output = tokio::process::Command::new("yt-dlp")
-                .arg("-x")
-                .arg("-o")
-                .arg("-")
-                .arg(&song.url)
-                .output()
-                .await
-                .unwrap();
-            Song { title: song.title.clone(), audio: output.stdout }
+            Song { title: song.title.clone(), audio: download_url(&song.url).await }
         }
     }
 }

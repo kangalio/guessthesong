@@ -352,6 +352,15 @@ pub async fn run_axum(spotify_client: rspotify::ClientCredsSpotify) {
         spotify_client,
     });
 
+    let state2 = state.clone();
+    let _empty_room_purger = spawn_attached(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            state2.rooms.lock().retain(|_id, room| room.lock().players.len() > 0);
+            interval.tick().await;
+        }
+    });
+
     let app = axum::Router::new()
         .route("/server-browser/ws", axum::routing::get(get_server_browser_ws))
         .route("/create-room.html", axum::routing::get(fallback).post(post_create_room))

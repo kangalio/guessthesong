@@ -68,7 +68,7 @@ pub enum SendEvent {
     Chat { r#type: String, username: String, uuid: PlayerId, msg: String },
     Loading,
     Timer { message: u32, hint: String, scores: Vec<SinglePlayerData>, round_time: u32 },
-    PlayerTyping { uuid: PlayerId, typing: bool },
+    #[serde(rename = "playerTyping")] #[rustfmt::skip] PlayerTyping { uuid: PlayerId, typing: bool },
     Notify { message: String },
     NewTurn,
     Scoreboard { payload: Vec<ScoreboardPlayer>, round: u32, max_rounds: u32 },

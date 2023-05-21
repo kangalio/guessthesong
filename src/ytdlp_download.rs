@@ -1,3 +1,7 @@
+fn urlencode(s: &str) -> impl std::fmt::Display + '_ {
+    percent_encoding::percent_encode(s.as_bytes(), percent_encoding::NON_ALPHANUMERIC)
+}
+
 pub async fn download_url(url: &str) -> Vec<u8> {
     tokio::process::Command::new("yt-dlp")
         .arg("-x")
@@ -57,13 +61,15 @@ pub async fn download_best_effort(artists: &[&str], title: &str) -> Vec<u8> {
         .stdout
     */
 
+    let search_query = format!("{} - {}", artists.join(", "), title);
+
     tokio::process::Command::new("yt-dlp")
         .arg("-x")
         .args(["-o", "-"])
         .args(["--playlist-end", "1"])
         // https://www.reddit.com/r/youtubedl/wiki/howdoidownloadpartsofavideo/
         .args(["--download-sections", "*0-100"]) // 75s plus a few extra secs
-        .arg(format!("https://music.youtube.com/search?q={} - {}", artists.join(", "), title))
+        .arg(format!("https://music.youtube.com/search?q={}", urlencode(&search_query)))
         .output()
         .await
         .unwrap()

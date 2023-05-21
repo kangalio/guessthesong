@@ -10,6 +10,7 @@ pub async fn download_url(url: &str) -> Vec<u8> {
 }
 
 pub async fn download_best_effort(artists: &[&str], title: &str) -> Vec<u8> {
+    /*
     let output = tokio::process::Command::new("yt-dlp")
         .args(["--print", "%(id)s %(title)s"])
         .arg("--flat-playlist")
@@ -50,6 +51,19 @@ pub async fn download_best_effort(artists: &[&str], title: &str) -> Vec<u8> {
         // https://www.reddit.com/r/youtubedl/wiki/howdoidownloadpartsofavideo/
         .args(["--download-sections", "*0-100"]) // 75s plus a few extra secs
         .arg(id)
+        .output()
+        .await
+        .unwrap()
+        .stdout
+    */
+
+    tokio::process::Command::new("yt-dlp")
+        .arg("-x")
+        .args(["-o", "-"])
+        .args(["--playlist-end", "1"])
+        // https://www.reddit.com/r/youtubedl/wiki/howdoidownloadpartsofavideo/
+        .args(["--download-sections", "*0-100"]) // 75s plus a few extra secs
+        .arg(format!("https://music.youtube.com/search?q={} - {}", artists.join(", "), title))
         .output()
         .await
         .unwrap()
